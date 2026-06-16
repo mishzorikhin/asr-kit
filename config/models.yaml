@@ -1,0 +1,14 @@
+models:
+  - id: bond005-whisper-podlodka-turbo
+    path: /workspace/models/models--bond005--whisper-podlodka-turbo-ct2
+    owned_by: local
+    capabilities:
+      - transcription
+
+  - id: bond005-whisper-podlodka-turbo-diarize
+    path: /workspace/models/models--bond005--whisper-podlodka-turbo-ct2
+    owned_by: local
+    capabilities:
+      - transcription
+      - diarization
+    diarization_model: /workspace/models/pyannote/speaker-diarization-community-1

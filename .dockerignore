@@ -1,0 +1,16 @@
+.git
+.idea
+.venv
+__pycache__
+*.py[cod]
+*.mp3
+*.ogg
+*.wav
+*.flac
+*.m4a
+*.mp4
+*.webm
+.env
+.env.*
+!.env.example
+*.log
