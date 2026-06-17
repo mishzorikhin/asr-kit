@@ -149,6 +149,8 @@ docker compose -f docker-compose.arm.yml up -d
 
 Pull request'ы только проверяют сборку, без публикации в registry.
 
+Если push в GHCR падает с `permission_denied: write_package`, включите в репозитории **Settings → Actions → General → Workflow permissions → Read and write permissions** (не read-only).
+
 ## Запуск
 
 Требования:
