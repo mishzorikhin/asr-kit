@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import torch
 from faster_whisper import WhisperModel
 
@@ -242,4 +243,103 @@ class ASRService:
             "duration": info.duration,
             "segments": segments,
             "words": words,
+        }
+
+    def transcribe_array(
+        self,
+        audio: np.ndarray,
+        *,
+        sample_rate: int,
+        model_id: str,
+        language: str | None,
+        prompt: str | None,
+        temperature: float,
+        device: str,
+        compute_type: str,
+        beam_size: int,
+        vad_filter: bool = False,
+    ) -> dict[str, Any]:
+        configured_model = self.registry.get(model_id)
+        samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+
+        if samples.size == 0:
+            raise OpenAIAPIError(
+                "Audio buffer is empty",
+                param="audio",
+                code="empty_audio",
+            )
+
+        if sample_rate != 16000:
+            raise OpenAIAPIError(
+                f"Unsupported sample_rate {sample_rate}; realtime audio must be 16 kHz PCM16 mono.",
+                param="sample_rate",
+                code="unsupported_audio_format",
+            )
+
+        logger.info(
+            "Transcribing array model=%s language=%s samples=%d beam_size=%s vad_filter=%s",
+            model_id,
+            language,
+            samples.size,
+            beam_size,
+            vad_filter,
+        )
+
+        try:
+            record_tool_call(
+                "asr.transcribe_array",
+                model=model_id,
+                language=language,
+                device=device,
+                compute_type=compute_type,
+                beam_size=beam_size,
+                samples=samples.size,
+            )
+            with self.use_model(configured_model["path"], device, compute_type) as model:
+                segments_iter, info = model.transcribe(
+                    samples,
+                    language=language,
+                    initial_prompt=prompt,
+                    temperature=temperature,
+                    beam_size=beam_size,
+                    vad_filter=vad_filter,
+                    word_timestamps=False,
+                )
+                segments = []
+                for index, segment in enumerate(segments_iter):
+                    segments.append(
+                        {
+                            "id": index,
+                            "start": segment.start,
+                            "end": segment.end,
+                            "text": segment.text.strip(),
+                        }
+                    )
+        except OpenAIAPIError:
+            raise
+        except Exception as exc:
+            if is_gpu_memory_error(exc):
+                self._clear_cuda_cache()
+                raise gpu_memory_error(exc) from exc
+            raise OpenAIAPIError(
+                f"Could not transcribe audio buffer: {exc}",
+                param="audio",
+                code="audio_decode_failed",
+            ) from exc
+
+        text = " ".join(segment["text"] for segment in segments if segment["text"]).strip()
+        logger.info(
+            "Transcribed array model=%s duration=%s segments=%d text_chars=%d",
+            model_id,
+            info.duration,
+            len(segments),
+            len(text),
+        )
+        return {
+            "model": model_id,
+            "language": info.language,
+            "language_probability": info.language_probability,
+            "duration": info.duration,
+            "segments": segments,
+            "text": text,
         }

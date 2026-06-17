@@ -38,3 +38,13 @@ SUPPORTED_AUDIO_EXTENSIONS = {
 OPENAI_RESPONSE_FORMATS = {"diarized_json", "json", "text", "srt", "verbose_json", "vtt"}
 DIARIZED_RESPONSE_FORMATS = {"diarized_json", "json", "text"}
 TRANSCRIPTION_RESPONSE_FORMATS = {"json", "text", "srt", "verbose_json", "vtt"}
+
+# Realtime WebSocket transcription (PCM16 mono @ 16 kHz; OpenAI Realtime uses 24 kHz).
+REALTIME_SAMPLE_RATE = int(os.getenv("REALTIME_SAMPLE_RATE", "16000"))
+REALTIME_MAX_BUFFER_SEC = float(os.getenv("REALTIME_MAX_BUFFER_SEC", "60"))
+REALTIME_MIN_SEGMENT_MS = int(os.getenv("REALTIME_MIN_SEGMENT_MS", "300"))
+REALTIME_INITIAL_PROMPT_CHARS = int(os.getenv("REALTIME_INITIAL_PROMPT_CHARS", "200"))
+REALTIME_VAD_THRESHOLD = float(os.getenv("REALTIME_VAD_THRESHOLD", "0.012"))
+REALTIME_SILENCE_DURATION_MS = int(os.getenv("REALTIME_SILENCE_DURATION_MS", "700"))
+REALTIME_BEAM_SIZE = int(os.getenv("REALTIME_BEAM_SIZE", "1"))
+REALTIME_WS_IDLE_TIMEOUT_SEC = float(os.getenv("REALTIME_WS_IDLE_TIMEOUT_SEC", "300"))
