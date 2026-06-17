@@ -32,6 +32,8 @@ RUN python -m pip install \
 
 FROM deps AS runtime
 
+LABEL org.opencontainers.image.source=https://github.com/mishzorikhin/asr-kit
+
 COPY app /workspace/app
 COPY config /workspace/config
 
