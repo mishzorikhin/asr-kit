@@ -149,7 +149,25 @@ docker compose -f docker-compose.arm.yml up -d
 
 Pull request'ы только проверяют сборку, без публикации в registry.
 
-Если push в GHCR падает с `permission_denied: write_package`, включите в репозитории **Settings → Actions → General → Workflow permissions → Read and write permissions** (не read-only).
+### Если push падает с `permission_denied: write_package`
+
+Workflow permissions уже на **Read and write** — значит, проблема в доступе к пакету GHCR, а не в YAML.
+
+**Вариант A — привязать репозиторий к пакету (рекомендуется):**
+
+1. Откройте https://github.com/users/mishzorikhin/packages/container/asr-kit/settings  
+   (если пакета ещё нет — сначала создайте пустой push вручную или перейдите к варианту B)
+2. **Manage Actions access** → **Add repository** → `mishzorikhin/asr-kit` → роль **Write**
+3. **Connect repository** (если есть) → выберите `mishzorikhin/asr-kit`
+4. Перезапустите workflow: **Actions → Build and push container → Re-run all jobs**
+
+**Вариант B — PAT (если вариант A не помог):**
+
+1. GitHub → **Settings → Developer settings → Personal access tokens → Tokens (classic)**
+2. Создайте токен со scope `write:packages` (и `read:packages`)
+3. В репозитории: **Settings → Secrets and variables → Actions → New repository secret**
+4. Имя: `GHCR_TOKEN`, значение: токен
+5. Перезапустите workflow — он использует `GHCR_TOKEN` вместо `GITHUB_TOKEN`
 
 ## Запуск
 
