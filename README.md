@@ -54,6 +54,32 @@ app/services/              # faster-whisper и pyannote
 app/openai_format.py       # OpenAI-compatible responses
 ```
 
+## CI/CD
+
+При push в `master` или теге `v*` GitHub Actions собирает образы и публикует их в [GitHub Container Registry](https://github.com/mishzorikhin/asr-kit/pkgs/container/asr-kit):
+
+| Тег | Dockerfile | Платформа | Назначение |
+|-----|------------|-----------|------------|
+| `cuda12`, `latest` | `Dockerfile` | `linux/amd64` | GPU (CUDA 12.8) |
+| `arm64` | `Dockerfile.arm64` | `linux/arm64` | CPU (Apple Silicon и др.) |
+
+Пример запуска готового образа:
+
+```bash
+ASR_IMAGE=ghcr.io/mishzorikhin/asr-kit:cuda12 docker compose up -d
+```
+
+Для ARM:
+
+```bash
+docker compose -f docker-compose.arm.yml up -d
+# в .env: ASR_IMAGE=ghcr.io/mishzorikhin/asr-kit:arm64
+```
+
+Пакет в GHCR по умолчанию может быть приватным. Чтобы сделать его публичным: **GitHub → Packages → asr-kit → Package settings → Change visibility**.
+
+Pull request'ы только проверяют сборку, без публикации в registry.
+
 ## Запуск
 
 Требования:
