@@ -3,6 +3,7 @@ uvicorn[standard]==0.42.0
 python-multipart==0.0.20
 pydantic==2.12.5
 PyYAML==6.0.3
+click>=8.0,<8.4,!=8.3.0
 
 faster-whisper==1.1.1
 pyannote.audio==4.0.4
