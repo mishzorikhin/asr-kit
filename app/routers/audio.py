@@ -1,10 +1,11 @@
 import asyncio
 import logging
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, Response
 
 from app.config import (
     DEFAULT_COMPUTE_TYPE,
@@ -17,8 +18,12 @@ from app.config import (
 )
 from app.errors import OpenAIAPIError
 from app.openai_format import format_openai_response
-from app.services.asr import ASRService
-from app.services.diarization import DiarizationService
+from app.request_cancel import RequestCancellationToken, watch_request_disconnect
+from app.services.transcription_executor import (
+    SubprocessTranscriptionExecutor,
+    TranscriptionCancelled,
+    TranscriptionJob,
+)
 from app.tool_calls import current_request_id, new_request_id, record_tool_call
 from app.upload import save_upload_to_temp_file
 
@@ -442,7 +447,7 @@ async def create_transcription(
     max_speakers: int | None = Form(None, description="Local extension: maximum speaker count for pyannote."),
     num_speakers: int | None = Form(None, description="Local extension: exact speaker count for pyannote."),
     use_exclusive: bool = Form(True, description="Local extension: use pyannote exclusive diarization when available."),
-) -> dict[str, Any] | PlainTextResponse:
+) -> dict[str, Any] | PlainTextResponse | Response:
     request_id = new_request_id()
     request_token = current_request_id.set(request_id)
     record_tool_call("audio.transcriptions.request", model=model, filename=file.filename)
@@ -495,12 +500,26 @@ async def create_transcription(
             response_format,
             language,
         )
+        cancellation_token = RequestCancellationToken()
+        disconnect_watcher = asyncio.create_task(
+            watch_request_disconnect(request, cancellation_token)
+        )
+
         try:
-            if "diarization" in configured_model["capabilities"]:
-                diarization_service: DiarizationService = request.app.state.diarization_service
-                transcription = await asyncio.to_thread(
-                    diarization_service.transcribe_with_diarization,
-                    tmp_path,
+            if await request.is_disconnected():
+                cancellation_token.cancel("client_disconnected")
+                record_tool_call(
+                    "http.client_disconnect",
+                    status="cancelled",
+                    path=request.url.path,
+                )
+
+            transcription_executor: SubprocessTranscriptionExecutor = (
+                request.app.state.transcription_executor
+            )
+            transcription = await transcription_executor.run(
+                TranscriptionJob(
+                    audio_path=tmp_path,
                     model_id=model,
                     language=language,
                     prompt=prompt,
@@ -510,27 +529,16 @@ async def create_transcription(
                     beam_size=beam_size,
                     vad_filter=vad_filter,
                     timestamp_granularities=timestamp_granularity_values,
+                    diarization_enabled="diarization" in configured_model["capabilities"],
                     diarization_model=resolved_diarization_model,
                     min_speakers=min_speakers,
                     max_speakers=max_speakers,
                     num_speakers=num_speakers,
                     use_exclusive=use_exclusive,
-                )
-            else:
-                asr_service: ASRService = request.app.state.asr_service
-                transcription = await asyncio.to_thread(
-                    asr_service.transcribe,
-                    tmp_path,
-                    model_id=model,
-                    language=language,
-                    prompt=prompt,
-                    temperature=temperature,
-                    device=device,
-                    compute_type=compute_type,
-                    beam_size=beam_size,
-                    vad_filter=vad_filter,
-                    timestamp_granularities=timestamp_granularity_values,
-                )
+                    request_id=request_id,
+                ),
+                cancellation_token,
+            )
 
             record_tool_call("audio.response.format", response_format=response_format)
             formatted = format_openai_response(
@@ -546,7 +554,23 @@ async def create_transcription(
                 return PlainTextResponse(formatted, media_type=media_type)
 
             return formatted
+        except TranscriptionCancelled as exc:
+            record_tool_call(
+                "audio.transcriptions.cancelled",
+                status="cancelled",
+                reason=exc.reason,
+            )
+            logger.info(
+                "Cancelled transcription request file=%s model=%s reason=%s",
+                file.filename,
+                model,
+                exc.reason,
+            )
+            return Response(status_code=499)
         finally:
+            disconnect_watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await disconnect_watcher
             Path(tmp_path).unlink(missing_ok=True)
             record_tool_call("audio.upload.cleanup", path=tmp_path)
     except Exception as exc:

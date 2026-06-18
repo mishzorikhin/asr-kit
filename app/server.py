@@ -8,6 +8,7 @@ from app.routers import audio, health, models, realtime, ui
 from app.services.asr import ASRService
 from app.services.diarization import DiarizationService
 from app.services.model_unloader import ModelUnloader
+from app.services.transcription_executor import SubprocessTranscriptionExecutor
 
 
 def create_app() -> FastAPI:
@@ -43,11 +44,13 @@ def create_app() -> FastAPI:
     asr_service = ASRService(model_registry)
     diarization_service = DiarizationService(asr_service)
     model_unloader = ModelUnloader(asr_service, diarization_service)
+    transcription_executor = SubprocessTranscriptionExecutor()
 
     app.state.model_registry = model_registry
     app.state.asr_service = asr_service
     app.state.diarization_service = diarization_service
     app.state.model_unloader = model_unloader
+    app.state.transcription_executor = transcription_executor
 
     app.add_exception_handler(OpenAIAPIError, openai_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
