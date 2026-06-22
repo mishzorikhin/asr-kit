@@ -13,21 +13,48 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     ffmpeg \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv "$VIRTUAL_ENV" \
-    && "$VIRTUAL_ENV/bin/python" -m pip install --upgrade pip setuptools wheel
+    && python -m pip install --upgrade pip setuptools wheel
 
 
 FROM base AS deps
 
 COPY requirements.arm64.txt /workspace/requirements.arm64.txt
 
+# Убираем пакеты, которые должны ставиться только явно.
+# Иначе requirements может снова притянуть CUDA torchcodec.
+RUN grep -Ev '^(torch|torchaudio|torchcodec)([<>=~! ].*)?$' \
+    /workspace/requirements.arm64.txt \
+    > /workspace/requirements.clean.txt
+
+# ARM64 CPU-only stack.
+# TorchCodec на Linux по умолчанию может ставить CUDA-wheel,
+# поэтому ставим его явно из PyTorch CPU index.
 RUN python -m pip install \
-        torch==2.10.0 \
-        torchaudio==2.10.0 \
-        --index-url https://download.pytorch.org/whl/cpu \
-    && python -m pip install -r /workspace/requirements.arm64.txt
+    torch==2.11.0 \
+    torchaudio==2.11.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+RUN python -m pip install -r /workspace/requirements.clean.txt
+
+RUN python -m pip install --force-reinstall --no-deps \
+    torchcodec==0.13.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Fail-fast проверка при сборке.
+RUN python - <<'PY'
+import torch
+import torchaudio
+import torchcodec
+
+print("torch:", torch.__version__)
+print("torchaudio:", torchaudio.__version__)
+print("torchcodec:", torchcodec.__version__)
+print("cuda available:", torch.cuda.is_available())
+PY
 
 
 FROM deps AS runtime
@@ -41,8 +68,10 @@ ENV HF_HOME=/workspace/hf-cache
 ENV HF_HUB_OFFLINE=1
 ENV TRANSFORMERS_OFFLINE=1
 
+ENV MODELS_CONFIG_PATH=/workspace/config/models.yaml
 ENV MODEL_DIR=/workspace/models
 ENV DEFAULT_DIARIZATION_MODEL=/workspace/models/pyannote/speaker-diarization-community-1
+
 ENV DEFAULT_DEVICE=cpu
 ENV DEFAULT_COMPUTE_TYPE=int8
 ENV DEFAULT_LANGUAGE=ru
