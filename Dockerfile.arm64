@@ -25,23 +25,33 @@ FROM base AS deps
 
 COPY requirements.arm64.txt /workspace/requirements.arm64.txt
 
+# torch / torchaudio / torchcodec ставим отдельно.
+# torchcodec убираем, потому что на linux/arm64 он легко тянет не тот wheel.
 RUN grep -Ev '^(torch|torchaudio|torchcodec)([<>=~! ].*)?$' \
     /workspace/requirements.arm64.txt \
     > /workspace/requirements.clean.txt
 
+# Для linux/arm64 ставим с обычного PyPI, НЕ с download.pytorch.org/whl/cpu.
 RUN python -m pip install \
-    torch==2.10.0 \
-    torchaudio==2.10.0 \
-    --index-url https://download.pytorch.org/whl/cpu
+    torch \
+    torchaudio
 
 RUN python -m pip install -r /workspace/requirements.clean.txt
 
+# Если pyannote или другая зависимость всё же подтянула torchcodec, удаляем.
 RUN python -m pip uninstall -y torchcodec || true
 
+# Проверка при сборке.
 RUN python - <<'PY'
+import platform
+import sys
+
 import torch
 import torchaudio
 
+print("platform:", platform.platform())
+print("machine:", platform.machine())
+print("python:", sys.version)
 print("torch:", torch.__version__)
 print("torchaudio:", torchaudio.__version__)
 print("cuda available:", torch.cuda.is_available())
@@ -66,6 +76,11 @@ ENV DEFAULT_DIARIZATION_MODEL=/workspace/models/pyannote/speaker-diarization-com
 ENV DEFAULT_DEVICE=cpu
 ENV DEFAULT_COMPUTE_TYPE=int8
 ENV DEFAULT_LANGUAGE=ru
+
+ENV LOG_LEVEL=INFO
+ENV MODEL_IDLE_TTL_SECONDS=600
+ENV MODEL_UNLOAD_INTERVAL_SECONDS=30
+ENV MODEL_UNLOAD_AFTER_REQUEST=true
 
 EXPOSE 8000
 
