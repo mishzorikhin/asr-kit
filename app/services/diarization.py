@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import wave
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -137,6 +138,8 @@ class DiarizationService:
                     "1",
                     "-ar",
                     "16000",
+                    "-acodec",
+                    "pcm_s16le",
                     "-vn",
                     "-f",
                     "wav",
@@ -155,6 +158,42 @@ class DiarizationService:
             ) from exc
 
         return output_path
+
+    def load_normalized_waveform(self, audio_path: str) -> dict[str, Any]:
+        record_tool_call("diarization.audio.load_waveform", input_path=audio_path)
+
+        try:
+            with wave.open(audio_path, "rb") as wav_file:
+                num_channels = wav_file.getnchannels()
+                sample_width = wav_file.getsampwidth()
+                sample_rate = wav_file.getframerate()
+                num_frames = wav_file.getnframes()
+                pcm_data = wav_file.readframes(num_frames)
+        except wave.Error as exc:
+            raise OpenAIAPIError(
+                f"Could not read normalized audio for diarization: {exc}",
+                param="file",
+                code="audio_waveform_load_failed",
+            ) from exc
+
+        if sample_width != 2:
+            raise OpenAIAPIError(
+                "Normalized diarization audio must be 16-bit PCM WAV.",
+                param="file",
+                code="unsupported_normalized_audio",
+            )
+
+        waveform = torch.frombuffer(bytearray(pcm_data), dtype=torch.int16).to(
+            torch.float32
+        )
+        waveform = waveform / 32768.0
+
+        if num_channels > 1:
+            waveform = waveform.reshape(-1, num_channels).transpose(0, 1).contiguous()
+        else:
+            waveform = waveform.unsqueeze(0)
+
+        return {"waveform": waveform, "sample_rate": sample_rate}
 
     def diarize(
         self,
@@ -192,8 +231,9 @@ class DiarizationService:
             use_exclusive=use_exclusive,
         )
         try:
+            audio = self.load_normalized_waveform(audio_path)
             with self.use_pipeline(diarization_model) as pipeline:
-                output = pipeline(audio_path, **diarization_kwargs)
+                output = pipeline(audio, **diarization_kwargs)
         except OpenAIAPIError:
             raise
         except Exception as exc:
