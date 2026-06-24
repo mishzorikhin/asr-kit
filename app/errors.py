@@ -35,6 +35,19 @@ def is_gpu_memory_error(exc: BaseException) -> bool:
     )
 
 
+def is_cuda_unavailable_error(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "no cuda-capable device is detected",
+            "cuda driver version is insufficient",
+            "cuda error: no device",
+            "found no nvidia driver",
+        )
+    )
+
+
 def gpu_memory_error(exc: BaseException) -> OpenAIAPIError:
     return OpenAIAPIError(
         f"Not enough GPU memory to process this request: {exc}",

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
+from app.config import resolve_compute_type, resolve_device
 from app.errors import OpenAIAPIError, openai_error_handler, validation_error_handler
 from app.logging_config import configure_logging
 from app.model_registry import ModelRegistry
@@ -60,6 +61,12 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def start_model_unloader() -> None:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        device = resolve_device()
+        compute_type = resolve_compute_type(device=device)
+        logger.info("ASR runtime device=%s compute_type=%s", device, compute_type)
         model_unloader.start()
 
     @app.on_event("shutdown")
