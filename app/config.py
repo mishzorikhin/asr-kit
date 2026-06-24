@@ -1,5 +1,15 @@
+import logging
 import os
 from pathlib import Path
+
+import torch
+
+logger = logging.getLogger(__name__)
+
+_CUDA_DEVICE_ALIASES = {"cuda", "gpu"}
+_CPU_COMPUTE_TYPE_FALLBACKS = {
+    "float16": "int8",
+}
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -11,6 +21,37 @@ def env_bool(name: str, default: bool) -> bool:
 
 DEFAULT_DEVICE = os.getenv("DEFAULT_DEVICE", "cuda")
 DEFAULT_COMPUTE_TYPE = os.getenv("DEFAULT_COMPUTE_TYPE", "float16")
+
+
+def resolve_device(device: str | None = None) -> str:
+    requested = (device or DEFAULT_DEVICE).strip().lower()
+    if requested in _CUDA_DEVICE_ALIASES:
+        if torch.cuda.is_available():
+            return "cuda"
+        logger.warning(
+            "Requested device=%r but no CUDA-capable device is available; using cpu",
+            device or DEFAULT_DEVICE,
+        )
+        return "cpu"
+    return requested
+
+
+def resolve_compute_type(
+    compute_type: str | None = None,
+    *,
+    device: str | None = None,
+) -> str:
+    resolved_device = resolve_device(device)
+    requested = (compute_type or DEFAULT_COMPUTE_TYPE).strip().lower()
+    fallback = _CPU_COMPUTE_TYPE_FALLBACKS.get(requested)
+    if resolved_device == "cpu" and fallback is not None:
+        logger.warning(
+            "compute_type=%r is not supported on cpu; using %r",
+            requested,
+            fallback,
+        )
+        return fallback
+    return requested
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "ru")
 DEFAULT_DIARIZATION_MODEL = os.getenv(
     "DEFAULT_DIARIZATION_MODEL",

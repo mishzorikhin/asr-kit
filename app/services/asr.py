@@ -9,7 +9,13 @@ import numpy as np
 import torch
 from faster_whisper import WhisperModel
 
-from app.config import MODEL_DIR, MODEL_IDLE_TTL_SECONDS, MODEL_UNLOAD_AFTER_REQUEST
+from app.config import (
+    MODEL_DIR,
+    MODEL_IDLE_TTL_SECONDS,
+    MODEL_UNLOAD_AFTER_REQUEST,
+    resolve_compute_type,
+    resolve_device,
+)
 from app.errors import OpenAIAPIError, gpu_memory_error, is_gpu_memory_error
 from app.model_registry import ModelRegistry, resolve_asr_model_path
 from app.tool_calls import record_tool_call
@@ -36,6 +42,8 @@ class ASRService:
 
     @contextmanager
     def use_model(self, model_path: str, device: str, compute_type: str):
+        device = resolve_device(device)
+        compute_type = resolve_compute_type(compute_type, device=device)
         resolved_path = resolve_asr_model_path(model_path)
         key = (resolved_path, device, compute_type)
 
