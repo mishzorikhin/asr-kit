@@ -193,8 +193,8 @@ TRANSCRIPTION_RESPONSES = {
             }
         },
     },
-    507: {
-        "description": "Server error when GPU memory is insufficient.",
+    503: {
+        "description": "Service unavailable when GPU memory is insufficient.",
         "content": {
             "application/json": {
                 "example": {

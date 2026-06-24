@@ -38,7 +38,7 @@ def is_gpu_memory_error(exc: BaseException) -> bool:
 def gpu_memory_error(exc: BaseException) -> OpenAIAPIError:
     return OpenAIAPIError(
         f"Not enough GPU memory to process this request: {exc}",
-        status_code=507,
+        status_code=503,
         error_type="server_error",
         code="insufficient_gpu_memory",
     )
