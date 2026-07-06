@@ -31,6 +31,10 @@ jobs:
             dockerfile: Dockerfile
             platforms: linux/amd64
             flavor: cuda12
+          - name: cpu
+            dockerfile: Dockerfile.cpu
+            platforms: linux/amd64
+            flavor: cpu
           - name: arm64
             dockerfile: Dockerfile.arm64
             platforms: linux/arm64
