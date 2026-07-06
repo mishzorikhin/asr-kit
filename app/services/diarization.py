@@ -12,7 +12,7 @@ from typing import Any
 import torch
 from pyannote.audio import Pipeline
 
-from app.config import DEFAULT_DEVICE, MODEL_IDLE_TTL_SECONDS, MODEL_UNLOAD_AFTER_REQUEST
+from app.config import MODEL_IDLE_TTL_SECONDS, MODEL_UNLOAD_AFTER_REQUEST, resolve_device
 from app.errors import OpenAIAPIError, gpu_memory_error, is_gpu_memory_error
 from app.services.asr import ASRService
 from app.tool_calls import record_tool_call
@@ -56,7 +56,7 @@ class DiarizationService:
                 record_tool_call("diarization.pipeline.load", path=model_path)
                 try:
                     pipeline = Pipeline.from_pretrained(path)
-                    pipeline.to(torch.device(DEFAULT_DEVICE))
+                    pipeline.to(torch.device(resolve_device()))
                 except Exception as exc:
                     if is_gpu_memory_error(exc):
                         self._clear_cuda_cache()

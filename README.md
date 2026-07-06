@@ -129,13 +129,21 @@ REALTIME_WS_IDLE_TIMEOUT_SEC=300
 
 | Тег | Dockerfile | Платформа | Назначение |
 |-----|------------|-----------|------------|
-| `cuda12`, `latest` | `Dockerfile` | `linux/amd64` | GPU (CUDA 12.8) |
+| `cuda12`, `latest` | `Dockerfile` | `linux/amd64` | GPU (CUDA 12.8, NVIDIA) |
+| `cpu` | `Dockerfile.cpu` | `linux/amd64` | CPU (AMD Ryzen/EPYC, Intel и др.) |
 | `arm64` | `Dockerfile.arm64` | `linux/arm64` | CPU (Apple Silicon и др.) |
 
 Пример запуска готового образа:
 
 ```bash
 ASR_IMAGE=ghcr.io/mishzorikhin/asr-kit:cuda12 docker compose up -d
+```
+
+Для CPU на AMD/Intel (linux/amd64, без NVIDIA GPU):
+
+```bash
+docker compose -f docker-compose.cpu.yml up -d
+# в .env: ASR_IMAGE=ghcr.io/mishzorikhin/asr-kit:cpu
 ```
 
 Для ARM:
@@ -174,10 +182,40 @@ Workflow permissions уже на **Read and write** — значит, пробл
 Требования:
 
 - Docker и Docker Compose
-- NVIDIA Container Toolkit для запуска на GPU
+- NVIDIA Container Toolkit — только для `docker-compose.yml` (GPU)
 - локальная директория с моделями, подключенная в контейнер как `/workspace/models`
 
-Перед запуском проверьте пути в `docker-compose.yml`:
+### GPU (NVIDIA)
+
+```bash
+docker compose up -d
+curl http://localhost:8000/v1/models
+```
+
+Проверка GPU внутри контейнера:
+
+```bash
+docker exec -it asr-kit nvidia-smi
+```
+
+### CPU на AMD / Intel (linux/amd64)
+
+Образ `cpu` — PyTorch CPU + faster-whisper с `int8`. Подходит для машин без NVIDIA GPU (AMD Ryzen, EPYC, Intel Xeon и т.д.). NVIDIA Container Toolkit не нужен.
+
+```bash
+docker compose -f docker-compose.cpu.yml up -d
+curl http://localhost:8000/v1/models
+```
+
+По умолчанию `DEFAULT_DEVICE=cpu`, `DEFAULT_COMPUTE_TYPE=int8`. Для ускорения на многоядерных AMD можно задать `OMP_NUM_THREADS` (0 = все ядра).
+
+### Apple Silicon / ARM64
+
+```bash
+docker compose -f docker-compose.arm.yml up -d
+```
+
+### Общие настройки
 
 ```yaml
 volumes:
@@ -190,19 +228,6 @@ volumes:
 
 ```bash
 cp .env.example .env
-```
-
-Запуск:
-
-```bash
-docker compose up -d
-curl http://localhost:8000/v1/models
-```
-
-Проверка GPU внутри контейнера:
-
-```bash
-docker exec -it faster-whisper-api nvidia-smi
 ```
 
 ## Автовыгрузка моделей

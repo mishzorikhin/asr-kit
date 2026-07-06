@@ -1,0 +1,54 @@
+services:
+  asr-api:
+    container_name: asr-kit
+    image: ${ASR_IMAGE:-local/asr-kit:cpu}
+    platform: linux/amd64
+
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+      target: runtime
+
+    ports:
+      - "${ASR_PORT:-8000}:8000"
+
+    environment:
+      HF_HOME: /workspace/hf-cache
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+
+      MODELS_CONFIG_PATH: /workspace/config/models.yaml
+      MODEL_DIR: /workspace/models
+      DEFAULT_DIARIZATION_MODEL: /workspace/models/pyannote/speaker-diarization-community-1
+
+      DEFAULT_DEVICE: ${DEFAULT_DEVICE:-cpu}
+      DEFAULT_COMPUTE_TYPE: ${DEFAULT_COMPUTE_TYPE:-int8}
+      DEFAULT_LANGUAGE: ${DEFAULT_LANGUAGE:-ru}
+
+      # faster-whisper (CTranslate2) на AMD/Intel: число потоков inference.
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-0}
+
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      MODEL_IDLE_TTL_SECONDS: ${MODEL_IDLE_TTL_SECONDS:-600}
+      MODEL_UNLOAD_INTERVAL_SECONDS: ${MODEL_UNLOAD_INTERVAL_SECONDS:-30}
+      MODEL_UNLOAD_AFTER_REQUEST: ${MODEL_UNLOAD_AFTER_REQUEST:-true}
+
+    command: >
+      uvicorn app.server:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 1
+
+    volumes:
+      - ${MODELS_CONFIG_FILE:-./config/models.yaml}:/workspace/config/models.yaml:ro
+      - ${MODELS_DIR:-./models}:/workspace/models:ro
+      - ${HF_CACHE_DIR:-./hf-cache}:/workspace/hf-cache
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+    restart: unless-stopped
