@@ -36,6 +36,7 @@ from app.openai_realtime_events import (
     default_session_config,
     error_event,
     session_diarization_completed_event,
+    session_ended_event,
     session_updated_event,
     speaker_assigned_event,
     speaker_updated_event,
@@ -145,10 +146,16 @@ class RealtimeSession:
         self._transcript_items: list[TranscriptItem] = []
         self._speaker_tracker: RealtimeSpeakerTracker | None = None
         self._finalized = False
+        self._ended = False
+        self._diarization_completed = False
 
     @property
     def closed(self) -> bool:
         return self._closed
+
+    @property
+    def ended_via_protocol(self) -> bool:
+        return self._ended
 
     def touch(self) -> None:
         self._last_activity_at = time.monotonic()
@@ -200,16 +207,48 @@ class RealtimeSession:
             return
         self._closed = True
 
+    async def end_session(self) -> None:
+        if self._ended:
+            await self.send_event(
+                error_event("Session already ended", code="session_already_ended")
+            )
+            return
+
+        self._ended = True
+        record_tool_call("realtime.session.end", model=self.model_id)
+
+        if self._is_speaking:
+            await self._finalize_speech(auto_commit=True, force=True)
+        elif len(self.buffer) > 0:
+            await self._handle_commit(force=True)
+
+        diarization_finalized = await self._run_finalize()
+
+        await self.send_event(
+            session_ended_event(
+                item_count=len(self._transcript_items),
+                diarization_finalized=diarization_finalized,
+            )
+        )
+        self._closed = True
+
     async def finalize_session(self) -> None:
+        """Best-effort finalize when the client disconnects without session.end."""
+        if self._ended:
+            return
+        await self._run_finalize()
+
+    async def _run_finalize(self) -> bool:
         if self._finalized:
-            return
+            return self._diarization_completed
         self._finalized = True
+
         if not self.speaker_config.enabled or not self.speaker_config.finalize:
-            return
+            return False
         if self.diarization_service is None:
-            return
+            return False
         if len(self._session_audio) == 0 or not self._transcript_items:
-            return
+            return False
 
         audio = self._session_audio.extract_all()
         items_snapshot = list(self._transcript_items)
@@ -229,7 +268,7 @@ class RealtimeSession:
                     param=exc.param,
                 )
             )
-            return
+            return False
         except Exception as exc:
             logger.exception("Realtime session diarization finalize failed model=%s", self.model_id)
             await self.send_event(
@@ -239,7 +278,7 @@ class RealtimeSession:
                     code="diarization_failed",
                 )
             )
-            return
+            return False
 
         for item, final_speaker in final_items:
             if item.speaker and item.speaker != final_speaker:
@@ -248,6 +287,15 @@ class RealtimeSession:
                         item.item_id,
                         final_speaker,
                         previous_speaker=item.speaker,
+                        final=True,
+                    )
+                )
+            elif not item.speaker:
+                await self.send_event(
+                    speaker_updated_event(
+                        item.item_id,
+                        final_speaker,
+                        previous_speaker="UNKNOWN",
                         final=True,
                     )
                 )
@@ -269,6 +317,8 @@ class RealtimeSession:
                 duration_sec=len(audio) / self.sample_rate,
             )
         )
+        self._diarization_completed = True
+        return True
 
     def _finalize_diarization(
         self,
@@ -320,6 +370,16 @@ class RealtimeSession:
 
     async def handle_event(self, event_type: str, payload: dict[str, Any]) -> None:
         self.touch()
+
+        if event_type == "session.end":
+            await self.end_session()
+            return
+
+        if self._ended:
+            await self.send_event(
+                error_event("Session already ended", code="session_already_ended")
+            )
+            return
 
         if event_type == "session.update":
             await self._handle_session_update(payload)

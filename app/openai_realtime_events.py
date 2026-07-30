@@ -146,6 +146,18 @@ def session_diarization_completed_event(
     )
 
 
+def session_ended_event(
+    *,
+    item_count: int,
+    diarization_finalized: bool,
+) -> dict[str, Any]:
+    return server_event(
+        "session.ended",
+        item_count=item_count,
+        diarization_finalized=diarization_finalized,
+    )
+
+
 def default_session_config(
     *,
     model_id: str,

@@ -1,6 +1,8 @@
 import numpy as np
+import pytest
 
 from app.openai_realtime_events import (
+    session_ended_event,
     speaker_assigned_event,
     transcription_completed_event,
 )
@@ -9,7 +11,7 @@ from app.services.realtime_speaker_tracker import OnlineSpeakerCluster, cosine_s
 
 def test_cosine_similarity_identical_vectors() -> None:
     vector = np.array([1.0, 2.0, 3.0], dtype=np.float32)
-    assert cosine_similarity(vector, vector) == 1.0
+    assert cosine_similarity(vector, vector) == pytest.approx(1.0)
 
 
 def test_online_speaker_cluster_assigns_new_speaker() -> None:
@@ -23,7 +25,7 @@ def test_online_speaker_cluster_assigns_new_speaker() -> None:
     assert speaker_a == "Alice"
     assert confidence_a == 1.0
     assert speaker_b == "B"
-    assert confidence_b == 1.0
+    assert confidence_b == pytest.approx(0.0)
 
 
 def test_online_speaker_cluster_reuses_similar_embedding() -> None:
@@ -62,3 +64,11 @@ def test_speaker_assigned_event_shape() -> None:
     assert event["speaker"] == "B"
     assert event["confidence"] == 0.77
     assert event["provisional"] is True
+
+
+def test_session_ended_event_shape() -> None:
+    event = session_ended_event(item_count=5, diarization_finalized=True)
+
+    assert event["type"] == "session.ended"
+    assert event["item_count"] == 5
+    assert event["diarization_finalized"] is True

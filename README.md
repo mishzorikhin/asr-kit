@@ -71,8 +71,58 @@ app/openai_realtime_events.py  # Realtime WebSocket event helpers
 |---------|----------|
 | `session.update` | Модель, язык, `input_audio_format`, порог VAD, детализация |
 | `input_audio_buffer.append` | Base64 PCM16 чанк |
-| `input_audio_buffer.commit` | Принудительно обработать буфер |
+| `input_audio_buffer.commit` | Принудительно обработать остаток буфера (одна фраза) |
 | `input_audio_buffer.clear` | Сбросить буфер |
+| `session.end` | **Аудио закончилось**: flush буфера, финальная диаризация, `session.ended` |
+
+### Жизненный цикл сессии
+
+Три разных момента, которые не стоит путать:
+
+| Момент | Кто инициирует | Что происходит |
+|--------|----------------|----------------|
+| Конец **фразы** | Сервер (VAD) | `completed` + опционально `words`, `speaker_assigned` |
+| Flush **хвоста** | Клиент (`commit`) | Обработка незавершённой фразы без паузы VAD |
+| Конец **сессии** | Клиент (`session.end`) | Flush + finalize + `session.ended` |
+
+Рекомендуемая последовательность:
+
+```text
+1. WS connect + session.update
+2. input_audio_buffer.append (много раз)
+3. session.end                         ← «аудио закончилось, жду финал»
+4. дождаться session.diarization.completed (если finalize=true)
+5. дождаться session.ended
+6. ws.close()
+```
+
+`session.end` автоматически делает то, что раньше требовало отдельного `commit`: сбрасывает остаток буфера, ждёт транскрипцию последней фразы, запускает pyannote (если `finalize: true`), затем шлёт `session.ended`. **Не закрывайте WebSocket до `session.ended`.**
+
+Пример завершения сессии:
+
+```json
+{ "type": "session.end" }
+```
+
+Ответ сервера (порядок):
+
+```text
+... completed / speaker_assigned для последней фразы ...
+session.diarization.completed   ← только если finalize=true
+session.ended                   ← сигнал «можно закрывать соединение»
+```
+
+`session.ended` всегда приходит последним:
+
+```json
+{
+  "type": "session.ended",
+  "item_count": 12,
+  "diarization_finalized": true
+}
+```
+
+Если клиент оборвёт соединение без `session.end`, сервер попытается сделать finalize в best-effort режиме, но ответ может не дойти.
 
 Пример `session.update` с детализацией:
 
@@ -108,7 +158,8 @@ app/openai_realtime_events.py  # Realtime WebSocket event helpers
 | `conversation.item.input_audio_transcription.completed` | Финальный текст сегмента; опционально `words` |
 | `conversation.item.input_audio_transcription.speaker_assigned` | Provisional speaker label для сегмента |
 | `conversation.item.input_audio_transcription.speaker_updated` | Уточнение speaker label (в т.ч. после finalize) |
-| `session.diarization.completed` | Финальная диаризация всей сессии |
+| `session.diarization.completed` | Финальная диаризация всей сессии (перед `session.ended`) |
+| `session.ended` | Сессия завершена; можно закрывать WebSocket |
 | `error` | Ошибка в стиле OpenAI |
 
 ### Поведение
@@ -126,7 +177,7 @@ app/openai_realtime_events.py  # Realtime WebSocket event helpers
 1. Сразу после паузы: `delta` + `completed` с текстом.
 2. В том же `completed` (если включено): `words` с абсолютными таймкодами сессии.
 3. Через ~0.5–1 с: `speaker_assigned` с provisional label (`A`, `B`, …).
-4. При закрытии сессии (если `finalize=true`): `speaker_updated` + `session.diarization.completed`.
+4. После `session.end` (если `finalize=true`): `session.diarization.completed`, затем `session.ended`.
 
 ### Демо
 

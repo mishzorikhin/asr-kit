@@ -335,6 +335,9 @@ def realtime_demo(
           log(`speaker updated ${{event.item_id}}: ${{event.previous_speaker}} -> ${{event.speaker}}`);
         }} else if (event.type === "session.diarization.completed") {{
           log(`session diarization completed (${{event.items?.length || 0}} items)`);
+        }} else if (event.type === "session.ended") {{
+          log(`session ended (${{event.item_count || 0}} items, finalize=${{event.diarization_finalized}})`);
+          if (ws && ws.readyState === WebSocket.OPEN) ws.close();
         }} else if (event.type === "error") {{
           log(`ERROR: ${{event.error?.message || "unknown"}}`);
         }} else {{
@@ -370,18 +373,12 @@ def realtime_demo(
     }}
 
     function stop() {{
+      cleanupAudio();
       if (ws && ws.readyState === WebSocket.OPEN) {{
-        sendEvent({{ type: "input_audio_buffer.commit" }});
-        if (ENABLE_FINALIZE) {{
-          setTimeout(() => {{
-            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
-          }}, 3000);
-        }} else {{
-          ws.close();
-        }}
+        statusEl.textContent = "Finishing session...";
+        sendEvent({{ type: "session.end" }});
         return;
       }}
-      cleanupAudio();
     }}
 
     startBtn.addEventListener("click", start);

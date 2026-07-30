@@ -138,7 +138,8 @@ async def realtime_transcription(
         logger.info("Realtime client disconnected model=%s", model)
     finally:
         idle_task.cancel()
-        await session.finalize_session()
+        if not session.ended_via_protocol:
+            await session.finalize_session()
         await session.close()
         record_tool_call("realtime.disconnect", model=model)
 
