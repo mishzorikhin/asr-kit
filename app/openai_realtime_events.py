@@ -78,12 +78,71 @@ def transcription_completed_event(
     transcript: str,
     *,
     content_index: int = 0,
+    words: list[dict[str, Any]] | None = None,
+    speaker: str | None = None,
+    speaker_confidence: float | None = None,
+    speaker_provisional: bool | None = None,
 ) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "item_id": item_id,
+        "content_index": content_index,
+        "transcript": transcript,
+    }
+    if words:
+        payload["words"] = words
+    if speaker is not None:
+        payload["speaker"] = speaker
+    if speaker_confidence is not None:
+        payload["speaker_confidence"] = speaker_confidence
+    if speaker_provisional is not None:
+        payload["speaker_provisional"] = speaker_provisional
     return server_event(
         "conversation.item.input_audio_transcription.completed",
+        **payload,
+    )
+
+
+def speaker_assigned_event(
+    item_id: str,
+    speaker: str,
+    *,
+    confidence: float,
+    provisional: bool = True,
+) -> dict[str, Any]:
+    return server_event(
+        "conversation.item.input_audio_transcription.speaker_assigned",
         item_id=item_id,
-        content_index=content_index,
-        transcript=transcript,
+        speaker=speaker,
+        confidence=confidence,
+        provisional=provisional,
+    )
+
+
+def speaker_updated_event(
+    item_id: str,
+    speaker: str,
+    *,
+    previous_speaker: str,
+    final: bool = False,
+) -> dict[str, Any]:
+    return server_event(
+        "conversation.item.input_audio_transcription.speaker_updated",
+        item_id=item_id,
+        speaker=speaker,
+        previous_speaker=previous_speaker,
+        final=final,
+    )
+
+
+def session_diarization_completed_event(
+    *,
+    items: list[dict[str, Any]],
+    duration_sec: float,
+) -> dict[str, Any]:
+    return server_event(
+        "session.diarization.completed",
+        duration_sec=duration_sec,
+        items=items,
     )
 
 
@@ -95,17 +154,23 @@ def default_session_config(
     input_audio_format: str = "pcm16",
     vad_threshold: float,
     silence_duration_ms: int,
+    timestamp_granularities: list[str] | None = None,
+    speaker_diarization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    transcription_config: dict[str, Any] = {
+        "model": model_id,
+        "language": language,
+    }
+    if timestamp_granularities:
+        transcription_config["timestamp_granularities"] = timestamp_granularities
+
+    config: dict[str, Any] = {
         "id": f"sess_{uuid.uuid4().hex[:24]}",
         "object": "realtime.session",
         "model": model_id,
         "modalities": ["text"],
         "input_audio_format": input_audio_format,
-        "input_audio_transcription": {
-            "model": model_id,
-            "language": language,
-        },
+        "input_audio_transcription": transcription_config,
         "turn_detection": {
             "type": "server_vad",
             "threshold": vad_threshold,
@@ -114,6 +179,9 @@ def default_session_config(
         },
         "created_at": int(time.time()),
     }
+    if speaker_diarization is not None:
+        config["speaker_diarization"] = speaker_diarization
+    return config
 
 
 def parse_client_event(raw: dict[str, Any]) -> tuple[str, dict[str, Any]]:

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from app.config import (
     DEFAULT_COMPUTE_TYPE,
     DEFAULT_DEVICE,
+    DEFAULT_DIARIZATION_MODEL,
     DEFAULT_LANGUAGE,
     REALTIME_WS_IDLE_TIMEOUT_SEC,
 )
@@ -17,6 +18,7 @@ from app.errors import OpenAIAPIError
 from app.model_registry import ModelRegistry
 from app.openai_realtime_events import error_event, parse_client_event, session_created_event
 from app.services.asr import ASRService
+from app.services.diarization import DiarizationService
 from app.services.realtime_session import RealtimeSession
 from app.tool_calls import record_tool_call
 
@@ -44,6 +46,7 @@ async def realtime_transcription(
 
     registry: ModelRegistry = websocket.app.state.model_registry
     asr_service: ASRService = websocket.app.state.asr_service
+    diarization_service: DiarizationService = websocket.app.state.diarization_service
 
     async def send_event(event: dict[str, Any]) -> None:
         await websocket.send_json(event)
@@ -65,11 +68,16 @@ async def realtime_transcription(
     record_tool_call("realtime.connect", model=model)
     session = RealtimeSession(
         asr_service=asr_service,
+        diarization_service=diarization_service,
         model_id=model,
         send_event=send_event,
         language=DEFAULT_LANGUAGE,
         device=DEFAULT_DEVICE,
         compute_type=DEFAULT_COMPUTE_TYPE,
+        diarization_capable="diarization" in configured_model["capabilities"],
+        default_diarization_model=configured_model.get(
+            "diarization_model", DEFAULT_DIARIZATION_MODEL
+        ),
     )
     await send_event(session_created_event(session.session_snapshot()))
 
@@ -130,6 +138,7 @@ async def realtime_transcription(
         logger.info("Realtime client disconnected model=%s", model)
     finally:
         idle_task.cancel()
+        await session.finalize_session()
         await session.close()
         record_tool_call("realtime.disconnect", model=model)
 

@@ -133,8 +133,14 @@ def get_tool_calls(limit: int = Query(200, ge=1, le=500)) -> dict[str, list[dict
 @router.get("/realtime-demo", response_class=HTMLResponse, include_in_schema=False)
 def realtime_demo(
     model: str = Query("bond005-whisper-podlodka-turbo", description="Model id for the demo"),
+    words: bool = Query(False, description="Request word timestamps in session.update"),
+    speakers: bool = Query(False, description="Enable provisional speaker diarization"),
+    finalize: bool = Query(False, description="Run full pyannote diarization on session end"),
 ) -> str:
     safe_model = model.replace("\\", "\\\\").replace('"', '\\"')
+    enable_words = "true" if words else "false"
+    enable_speakers = "true" if speakers else "false"
+    enable_finalize = "true" if finalize else "false"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -167,7 +173,7 @@ def realtime_demo(
 <body>
   <header>
     <h1>Realtime transcription demo</h1>
-    <p>Microphone → WebSocket <code>/v1/realtime</code> → live text. Audio is resampled to PCM16 mono 16 kHz.</p>
+    <p>Microphone → WebSocket <code>/v1/realtime</code> → live text, optional words and speaker labels.</p>
   </header>
   <main>
     <div class="panel">
@@ -183,6 +189,9 @@ def realtime_demo(
   </main>
   <script>
     const MODEL_ID = "{safe_model}";
+    const ENABLE_WORDS = {enable_words};
+    const ENABLE_SPEAKERS = {enable_speakers};
+    const ENABLE_FINALIZE = {enable_finalize};
     const TARGET_RATE = 16000;
     const startBtn = document.querySelector("#start");
     const stopBtn = document.querySelector("#stop");
@@ -196,9 +205,30 @@ def realtime_demo(
     let mediaStream = null;
     let processor = null;
     let running = false;
+    const itemState = new Map();
 
     function log(line) {{
       logEl.textContent = `${{new Date().toLocaleTimeString()}} ${{line}}\\n` + logEl.textContent;
+    }}
+
+    function renderTranscript() {{
+      const lines = [];
+      for (const state of itemState.values()) {{
+        const prefix = state.speaker ? `${{state.speaker}}: ` : "";
+        if (state.words && state.words.length) {{
+          const annotated = state.words.map((word) => `${{word.word}}[${{word.start.toFixed(2)}}]`).join(" ");
+          lines.push(`${{prefix}}${{annotated}}`);
+        }} else {{
+          lines.push(`${{prefix}}${{state.text || ""}}`);
+        }}
+      }}
+      transcriptEl.textContent = lines.join("\\n");
+    }}
+
+    function upsertItem(itemId, patch) {{
+      const current = itemState.get(itemId) || {{ text: "", speaker: null, words: null }};
+      itemState.set(itemId, {{ ...current, ...patch }});
+      renderTranscript();
     }}
 
     function wsUrl() {{
@@ -244,19 +274,28 @@ def realtime_demo(
     async function start() {{
       transcriptEl.textContent = "";
       logEl.textContent = "";
+      itemState.clear();
       statusEl.textContent = "Connecting...";
       ws = new WebSocket(wsUrl());
 
       ws.onopen = async () => {{
         statusEl.textContent = "Connected. Starting microphone...";
-        sendEvent({{
-          type: "session.update",
-          session: {{
-            input_audio_format: "pcm16",
-            input_audio_transcription: {{ model: MODEL_ID, language: "ru" }},
-            turn_detection: {{ type: "server_vad", threshold: 0.012, silence_duration_ms: 700 }},
-          }},
-        }});
+        const transcription = {{ model: MODEL_ID, language: "ru" }};
+        if (ENABLE_WORDS) transcription.timestamp_granularities = ["word"];
+        const session = {{
+          input_audio_format: "pcm16",
+          input_audio_transcription: transcription,
+          turn_detection: {{ type: "server_vad", threshold: 0.012, silence_duration_ms: 700 }},
+        }};
+        if (ENABLE_SPEAKERS) {{
+          session.speaker_diarization = {{
+            enabled: true,
+            mode: "provisional",
+            finalize: ENABLE_FINALIZE,
+            max_speakers: 4,
+          }};
+        }}
+        sendEvent({{ type: "session.update", session }});
 
         mediaStream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
         audioContext = new AudioContext();
@@ -284,8 +323,18 @@ def realtime_demo(
       ws.onmessage = (message) => {{
         const event = JSON.parse(message.data);
         if (event.type === "conversation.item.input_audio_transcription.completed") {{
-          const line = event.transcript || "";
-          transcriptEl.textContent += (transcriptEl.textContent ? "\\n" : "") + line;
+          upsertItem(event.item_id, {{
+            text: event.transcript || "",
+            words: event.words || null,
+          }});
+        }} else if (event.type === "conversation.item.input_audio_transcription.speaker_assigned") {{
+          upsertItem(event.item_id, {{ speaker: event.speaker }});
+          log(`speaker ${{event.item_id}} -> ${{event.speaker}} (${{event.confidence?.toFixed?.(2) || "?"}})`);
+        }} else if (event.type === "conversation.item.input_audio_transcription.speaker_updated") {{
+          upsertItem(event.item_id, {{ speaker: event.speaker }});
+          log(`speaker updated ${{event.item_id}}: ${{event.previous_speaker}} -> ${{event.speaker}}`);
+        }} else if (event.type === "session.diarization.completed") {{
+          log(`session diarization completed (${{event.items?.length || 0}} items)`);
         }} else if (event.type === "error") {{
           log(`ERROR: ${{event.error?.message || "unknown"}}`);
         }} else {{
@@ -323,7 +372,14 @@ def realtime_demo(
     function stop() {{
       if (ws && ws.readyState === WebSocket.OPEN) {{
         sendEvent({{ type: "input_audio_buffer.commit" }});
-        ws.close();
+        if (ENABLE_FINALIZE) {{
+          setTimeout(() => {{
+            if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+          }}, 3000);
+        }} else {{
+          ws.close();
+        }}
+        return;
       }}
       cleanupAudio();
     }}
