@@ -266,8 +266,10 @@ class ASRService:
         compute_type: str,
         beam_size: int,
         vad_filter: bool = False,
+        timestamp_granularities: list[str] | None = None,
     ) -> dict[str, Any]:
         configured_model = self.registry.get(model_id)
+        word_timestamps = bool(timestamp_granularities and "word" in timestamp_granularities)
         samples = np.asarray(audio, dtype=np.float32).reshape(-1)
 
         if samples.size == 0:
@@ -285,12 +287,13 @@ class ASRService:
             )
 
         logger.info(
-            "Transcribing array model=%s language=%s samples=%d beam_size=%s vad_filter=%s",
+            "Transcribing array model=%s language=%s samples=%d beam_size=%s vad_filter=%s word_timestamps=%s",
             model_id,
             language,
             samples.size,
             beam_size,
             vad_filter,
+            word_timestamps,
         )
 
         try:
@@ -311,16 +314,27 @@ class ASRService:
                     temperature=temperature,
                     beam_size=beam_size,
                     vad_filter=vad_filter,
-                    word_timestamps=False,
+                    word_timestamps=word_timestamps,
                 )
                 segments = []
+                words = []
                 for index, segment in enumerate(segments_iter):
+                    segment_words = [
+                        {
+                            "word": word.word,
+                            "start": word.start,
+                            "end": word.end,
+                        }
+                        for word in (getattr(segment, "words", None) or [])
+                    ]
+                    words.extend(segment_words)
                     segments.append(
                         {
                             "id": index,
                             "start": segment.start,
                             "end": segment.end,
                             "text": segment.text.strip(),
+                            "words": segment_words,
                         }
                     )
         except OpenAIAPIError:
@@ -349,5 +363,6 @@ class ASRService:
             "language_probability": info.language_probability,
             "duration": info.duration,
             "segments": segments,
+            "words": words,
             "text": text,
         }

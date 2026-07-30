@@ -59,7 +59,7 @@ app/openai_realtime_events.py  # Realtime WebSocket event helpers
 
 ## Realtime WebSocket transcription
 
-Псевдо-реалтайм транскрибация через WebSocket — локальное подмножество [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime). Только транскрибация: без voice agent, TTS, диаризации и tools.
+Псевдо-реалтайм транскрибация через WebSocket — локальное подмножество [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime). Только транскрибация: без voice agent, TTS и tools. Поддерживается прогрессивная детализация: word timestamps, provisional speaker labels и финальная pyannote-диаризация по завершении сессии.
 
 **Подключение:** `WS /v1/realtime?model=<model_id>`
 
@@ -69,10 +69,81 @@ app/openai_realtime_events.py  # Realtime WebSocket event helpers
 
 | Событие | Описание |
 |---------|----------|
-| `session.update` | Модель, язык, `input_audio_format`, порог VAD |
+| `session.update` | Модель, язык, `input_audio_format`, порог VAD, детализация |
 | `input_audio_buffer.append` | Base64 PCM16 чанк |
-| `input_audio_buffer.commit` | Принудительно обработать буфер |
+| `input_audio_buffer.commit` | Принудительно обработать остаток буфера (одна фраза) |
 | `input_audio_buffer.clear` | Сбросить буфер |
+| `session.end` | **Аудио закончилось**: flush буфера, финальная диаризация, `session.ended` |
+
+### Жизненный цикл сессии
+
+Три разных момента, которые не стоит путать:
+
+| Момент | Кто инициирует | Что происходит |
+|--------|----------------|----------------|
+| Конец **фразы** | Сервер (VAD) | `completed` + опционально `words`, `speaker_assigned` |
+| Flush **хвоста** | Клиент (`commit`) | Обработка незавершённой фразы без паузы VAD |
+| Конец **сессии** | Клиент (`session.end`) | Flush + finalize + `session.ended` |
+
+Рекомендуемая последовательность:
+
+```text
+1. WS connect + session.update
+2. input_audio_buffer.append (много раз)
+3. session.end                         ← «аудио закончилось, жду финал»
+4. дождаться session.diarization.completed (если finalize=true)
+5. дождаться session.ended
+6. ws.close()
+```
+
+`session.end` автоматически делает то, что раньше требовало отдельного `commit`: сбрасывает остаток буфера, ждёт транскрипцию последней фразы, запускает pyannote (если `finalize: true`), затем шлёт `session.ended`. **Не закрывайте WebSocket до `session.ended`.**
+
+Пример завершения сессии:
+
+```json
+{ "type": "session.end" }
+```
+
+Ответ сервера (порядок):
+
+```text
+... completed / speaker_assigned для последней фразы ...
+session.diarization.completed   ← только если finalize=true
+session.ended                   ← сигнал «можно закрывать соединение»
+```
+
+`session.ended` всегда приходит последним:
+
+```json
+{
+  "type": "session.ended",
+  "item_count": 12,
+  "diarization_finalized": true
+}
+```
+
+Если клиент оборвёт соединение без `session.end`, сервер попытается сделать finalize в best-effort режиме, но ответ может не дойти.
+
+Пример `session.update` с детализацией:
+
+```json
+{
+  "type": "session.update",
+  "session": {
+    "input_audio_transcription": {
+      "model": "bond005-whisper-podlodka-turbo-diarize",
+      "language": "ru",
+      "timestamp_granularities": ["word"]
+    },
+    "speaker_diarization": {
+      "enabled": true,
+      "mode": "provisional",
+      "finalize": true,
+      "max_speakers": 4
+    }
+  }
+}
+```
 
 ### Сервер → клиент
 
@@ -84,7 +155,11 @@ app/openai_realtime_events.py  # Realtime WebSocket event helpers
 | `input_audio_buffer.speech_stopped` | Конец фразы |
 | `input_audio_buffer.committed` | Буфер отправлен на ASR |
 | `conversation.item.input_audio_transcription.delta` | Частичный/сегментный текст (v1: полный сегмент) |
-| `conversation.item.input_audio_transcription.completed` | Финальный текст сегмента |
+| `conversation.item.input_audio_transcription.completed` | Финальный текст сегмента; опционально `words` |
+| `conversation.item.input_audio_transcription.speaker_assigned` | Provisional speaker label для сегмента |
+| `conversation.item.input_audio_transcription.speaker_updated` | Уточнение speaker label (в т.ч. после finalize) |
+| `session.diarization.completed` | Финальная диаризация всей сессии (перед `session.ended`) |
+| `session.ended` | Сессия завершена; можно закрывать WebSocket |
 | `error` | Ошибка в стиле OpenAI |
 
 ### Поведение
@@ -92,24 +167,38 @@ app/openai_realtime_events.py  # Realtime WebSocket event helpers
 - Server-side VAD по RMS: порог и длительность тишины настраиваются в `session.update.turn_detection`.
 - Сегменты короче ~300 ms не транскрибируются.
 - `initial_prompt` для continuity берётся из хвоста предыдущего текста (~200 символов).
-- Один inference на сессию в момент времени (`beam_size=1`, без diarization).
+- Один ASR inference на сессию в момент времени (`beam_size=1`).
+- Speaker embedding выполняется отдельно и не блокирует ASR.
+- Provisional speaker labels могут уточняться; при `speaker_diarization.finalize=true` в конце сессии запускается полный pyannote pass.
 - Кольцевой буфер до ~60 с (настраивается через env).
+
+### Прогрессивная детализация
+
+1. Сразу после паузы: `delta` + `completed` с текстом.
+2. В том же `completed` (если включено): `words` с абсолютными таймкодами сессии.
+3. Через ~0.5–1 с: `speaker_assigned` с provisional label (`A`, `B`, …).
+4. После `session.end` (если `finalize=true`): `session.diarization.completed`, затем `session.ended`.
 
 ### Демо
 
-Откройте в браузере: `http://localhost:8000/realtime-demo?model=<model_id>`
+Откройте в браузере:
 
-Микрофон → resample до 16 kHz → WebSocket → живой текст.
+```text
+http://localhost:8000/realtime-demo?model=<model_id>&words=1&speakers=1
+```
+
+Микрофон → resample до 16 kHz → WebSocket → живой текст, слова и спикеры.
 
 ### Ожидания по задержке
 
-Задержка складывается из: накопления аудио до конца фразы (VAD), времени inference faster-whisper на GPU/CPU и размера сегмента. Это **не** true streaming ASR token-by-token; типично сотни миллисекунд — несколько секунд после паузы в речи.
+Задержка складывается из: накопления аудио до конца фразы (VAD), времени inference faster-whisper на GPU/CPU и размера сегмента. Это **не** true streaming ASR token-by-token; типично сотни миллисекунд — несколько секунд после паузы в речи. Speaker labels приходят ещё с небольшой дополнительной задержкой.
 
 ### Отличия от OpenAI Realtime
 
 - Аудио 16 kHz, не 24 kHz
 - Нет `response.create`, tools, TTS, conversation items кроме транскрипции
 - `delta` в v1 дублирует полный сегмент (нет посимвольного стриминга)
+- `speaker_diarization` и `session.diarization.completed` — локальные расширения
 - `POST /v1/audio/transcriptions` с `stream=true` по-прежнему не поддерживается
 
 ### Env (realtime)
@@ -121,7 +210,13 @@ REALTIME_MIN_SEGMENT_MS=300
 REALTIME_VAD_THRESHOLD=0.012
 REALTIME_SILENCE_DURATION_MS=700
 REALTIME_WS_IDLE_TIMEOUT_SEC=300
+REALTIME_SPEAKER_EMBEDDING_MODEL=
+REALTIME_SPEAKER_SIMILARITY_THRESHOLD=0.75
+REALTIME_SPEAKER_MIN_SEGMENT_SEC=0.5
+REALTIME_SPEAKER_MAX_SPEAKERS=8
 ```
+
+`REALTIME_SPEAKER_EMBEDDING_MODEL` — опциональный абсолютный путь к pyannote embedding model. Если пусто, сервер пытается найти embedding рядом с `diarization_model`.
 
 ## CI/CD
 
