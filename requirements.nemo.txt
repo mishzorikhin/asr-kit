@@ -1,0 +1,12 @@
+# Optional NVIDIA NeMo ASR stack. Do NOT merge into requirements.txt for
+# whisper-only images — keeps the default GPU/CPU images lean.
+#
+# Install on top of the base ASR Kit deps:
+#   pip install -r requirements.txt
+#   pip install -r requirements.nemo.txt
+#
+# Prefer an image built with Dockerfile.nemo when deploying NeMo models.
+# Pin versions after the first successful CUDA smoke test against torch==2.10.0.
+
+nemo_toolkit[asr]
+soundfile>=0.12.1

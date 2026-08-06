@@ -9,6 +9,10 @@ from app.errors import OpenAIAPIError
 
 logger = logging.getLogger(__name__)
 
+BACKEND_FASTER_WHISPER = "faster-whisper"
+BACKEND_NEMO = "nemo"
+ALLOWED_BACKENDS = {BACKEND_FASTER_WHISPER, BACKEND_NEMO}
+
 
 def validate_local_asr_path(model_id: str, model_path: str) -> None:
     path = Path(model_path)
@@ -17,6 +21,21 @@ def validate_local_asr_path(model_id: str, model_path: str) -> None:
         raise RuntimeError(f"Model '{model_id}' path must be an absolute local path: {model_path}")
     if not path.exists():
         raise RuntimeError(f"Model '{model_id}' path does not exist: {model_path}")
+
+
+def validate_local_nemo_path(model_id: str, model_path: str) -> None:
+    path = Path(model_path)
+
+    if not path.is_absolute():
+        raise RuntimeError(f"Model '{model_id}' path must be an absolute local path: {model_path}")
+    if not path.exists():
+        raise RuntimeError(f"Model '{model_id}' path does not exist: {model_path}")
+    if not path.is_file():
+        raise RuntimeError(
+            f"Model '{model_id}' NeMo path must be a .nemo file, not a directory: {model_path}"
+        )
+    if path.suffix != ".nemo":
+        raise RuntimeError(f"Model '{model_id}' NeMo path must be a .nemo file: {model_path}")
 
 
 def resolve_asr_model_path(model_path: str) -> str:
@@ -31,6 +50,22 @@ def resolve_asr_model_path(model_path: str) -> str:
             return str(snapshot_path)
 
     return model_path
+
+
+def normalize_backend(raw_backend: Any, model_id: str) -> str:
+    if raw_backend is None or raw_backend == "":
+        return BACKEND_FASTER_WHISPER
+    backend = str(raw_backend).strip().lower()
+    if backend not in ALLOWED_BACKENDS:
+        raise RuntimeError(
+            f"Model '{model_id}' has unsupported backend: {backend}. "
+            f"Allowed: {', '.join(sorted(ALLOWED_BACKENDS))}"
+        )
+    return backend
+
+
+def backend_supports_realtime(backend: str) -> bool:
+    return backend == BACKEND_FASTER_WHISPER
 
 
 def load_models_config() -> dict[str, dict[str, Any]]:
@@ -62,7 +97,12 @@ def load_models_config() -> dict[str, dict[str, Any]]:
         if "transcription" not in capabilities:
             raise RuntimeError(f"Model '{model_id}' must include transcription capability")
 
-        validate_local_asr_path(model_id, model_path)
+        backend = normalize_backend(raw_model.get("backend"), model_id)
+        if backend == BACKEND_NEMO:
+            validate_local_nemo_path(model_id, model_path)
+        else:
+            validate_local_asr_path(model_id, model_path)
+
         diarization_model = raw_model.get("diarization_model", DEFAULT_DIARIZATION_MODEL)
         if "diarization" in capabilities:
             diarization_path = Path(diarization_model)
@@ -80,6 +120,7 @@ def load_models_config() -> dict[str, dict[str, Any]]:
         models[model_id] = {
             "id": model_id,
             "path": model_path,
+            "backend": backend,
             "owned_by": raw_model.get("owned_by", "local"),
             "created": int(raw_model.get("created", 0)),
             "capabilities": capabilities,

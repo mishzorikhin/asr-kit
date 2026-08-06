@@ -15,7 +15,7 @@ from app.config import (
     REALTIME_WS_IDLE_TIMEOUT_SEC,
 )
 from app.errors import OpenAIAPIError
-from app.model_registry import ModelRegistry
+from app.model_registry import ModelRegistry, backend_supports_realtime
 from app.openai_realtime_events import error_event, parse_client_event, session_created_event
 from app.services.asr import ASRService
 from app.services.diarization import DiarizationService
@@ -33,6 +33,14 @@ def _validate_realtime_model(registry: ModelRegistry, model_id: str) -> dict[str
             f"Model '{model_id}' does not support transcription.",
             param="model",
             code="model_not_found",
+        )
+    backend = configured.get("backend", "faster-whisper")
+    if not backend_supports_realtime(backend):
+        raise OpenAIAPIError(
+            f"Model '{model_id}' uses backend '{backend}', which is not supported "
+            "for WebSocket realtime yet. Use POST /v1/audio/transcriptions instead.",
+            param="model",
+            code="unsupported_backend",
         )
     return configured
 
