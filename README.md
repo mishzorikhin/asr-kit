@@ -1,6 +1,6 @@
 # ASR Kit
 
-Локальный OpenAI-compatible сервер транскрибации: `faster-whisper` + опциональная диаризация `pyannote.audio`.
+Локальный OpenAI-compatible сервер транскрибации: `faster-whisper` + опциональный **NVIDIA NeMo** + опциональная диаризация `pyannote.audio`.
 
 Сервис не скачивает модели во время работы. Модели описываются в YAML-конфиге и должны быть заранее доступны в локальной директории, подключенной в контейнер.
 
@@ -20,24 +20,41 @@ GET  /docs
 
 Модели, которые видны в `/v1/models`, задаются в `config/models.yaml`.
 
+Поле `backend` выбирает ASR-движок:
+
+| `backend` | Движок | `path` |
+|-----------|--------|--------|
+| `faster-whisper` (по умолчанию) | faster-whisper / CTranslate2 | директория CT2 или HF cache `models--...` |
+| `nemo` | NVIDIA NeMo ASR | файл `*.nemo` |
+
 ```yaml
 models:
   - id: bond005-whisper-podlodka-turbo
+    backend: faster-whisper
     path: /workspace/models/models--bond005--whisper-podlodka-turbo-ct2
     owned_by: local
     capabilities:
       - transcription
 
   - id: bond005-whisper-podlodka-turbo-diarize
+    backend: faster-whisper
     path: /workspace/models/models--bond005--whisper-podlodka-turbo-ct2
     owned_by: local
     capabilities:
       - transcription
       - diarization
     diarization_model: /workspace/models/pyannote/speaker-diarization-community-1
+
+  # Требует nemo_toolkit (requirements.nemo.txt / Dockerfile.nemo)
+  - id: nemo-stt-ru-conformer-ctc
+    backend: nemo
+    path: /workspace/models/nemo/stt_ru_conformer_ctc_large.nemo
+    owned_by: nvidia-nemo
+    capabilities:
+      - transcription
 ```
 
-`path` может указывать на HF cache root вида `models--...`; сервер сам развернёт его в `snapshots/<hash>`. `diarization_model` должен указывать на директорию pyannote pipeline с `config.yaml`.
+Для `faster-whisper` `path` может указывать на HF cache root вида `models--...`; сервер сам развернёт его в `snapshots/<hash>`. Для NeMo `path` должен быть абсолютным путём к локальному файлу `.nemo` (без скачивания с NGC в рантайме). `diarization_model` должен указывать на директорию pyannote pipeline с `config.yaml` — диаризация общая для обоих ASR-бэкендов.
 
 После изменений `config/models.yaml` перезапустите сервис:
 
@@ -45,21 +62,50 @@ models:
 docker compose restart asr-api
 ```
 
+## NVIDIA NeMo
+
+NeMo — отдельный опциональный модуль (`app/services/nemo_asr.py`). Дефолтный образ без `nemo_toolkit` не меняется.
+
+1. Положите `.nemo` чекпоинт в volume моделей, например `/workspace/models/nemo/...`.
+2. Добавьте запись с `backend: nemo` в `config/models.yaml`.
+3. Соберите образ с NeMo:
+
+```bash
+docker compose -f docker-compose.nemo.yml up -d --build
+```
+
+Или локально:
+
+```bash
+pip install -r requirements.txt
+pip install -r requirements.nemo.txt
+```
+
+Ограничения MVP:
+
+- REST `POST /v1/audio/transcriptions` — да
+- `WS /v1/realtime` — да для `faster-whisper` и `nemo` (тот же VAD + chunked `transcribe_array`)
+- Word timestamps для NeMo — пока пустые (`words: []`), текст фразы возвращается
+- Параметры `beam_size` / `vad_filter` / `prompt` / `compute_type` ориентированы на faster-whisper и для NeMo игнорируются
+
 ## Код
 
 ```text
-app/server.py              # сборка FastAPI app
-app/config.py              # env/default settings
-app/model_registry.py      # загрузка и валидация config/models.yaml
-app/routers/               # /health, /v1/models, /v1/audio/transcriptions, /v1/realtime
-app/services/              # faster-whisper, pyannote, realtime session
-app/openai_format.py       # OpenAI-compatible responses
-app/openai_realtime_events.py  # Realtime WebSocket event helpers
+app/server.py                 # сборка FastAPI app
+app/config.py                 # env/default settings
+app/model_registry.py         # загрузка и валидация config/models.yaml
+app/routers/                  # /health, /v1/models, /v1/audio/transcriptions, /v1/realtime
+app/services/asr.py           # фасад ASR (dispatch по backend)
+app/services/whisper_asr.py   # faster-whisper
+app/services/nemo_asr.py      # NVIDIA NeMo (optional import)
+app/services/diarization.py   # pyannote
+app/openai_format.py          # OpenAI-compatible responses
+app/openai_realtime_events.py # Realtime WebSocket event helpers
 ```
 
 ## Realtime WebSocket transcription
 
-Псевдо-реалтайм транскрибация через WebSocket — локальное подмножество [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime). Только транскрибация: без voice agent, TTS и tools. Поддерживается прогрессивная детализация: word timestamps, provisional speaker labels и финальная pyannote-диаризация по завершении сессии.
+Псевдо-реалтайм транскрибация через WebSocket — локальное подмножество [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime). Только транскрибация: без voice agent, TTS и tools. Работает с моделями `backend: faster-whisper` и `backend: nemo`. Поддерживается прогрессивная детализация: word timestamps (для Whisper), provisional speaker labels и финальная pyannote-диаризация по завершении сессии.
 
 **Подключение:** `WS /v1/realtime?model=<model_id>`
 
@@ -191,7 +237,7 @@ http://localhost:8000/realtime-demo?model=<model_id>&words=1&speakers=1
 
 ### Ожидания по задержке
 
-Задержка складывается из: накопления аудио до конца фразы (VAD), времени inference faster-whisper на GPU/CPU и размера сегмента. Это **не** true streaming ASR token-by-token; типично сотни миллисекунд — несколько секунд после паузы в речи. Speaker labels приходят ещё с небольшой дополнительной задержкой.
+Задержка складывается из: накопления аудио до конца фразы (VAD), времени inference ASR (`faster-whisper` или NeMo) на GPU/CPU и размера сегмента. Это **не** true streaming ASR token-by-token; типично сотни миллисекунд — несколько секунд после паузы в речи. Speaker labels приходят ещё с небольшой дополнительной задержкой.
 
 ### Отличия от OpenAI Realtime
 

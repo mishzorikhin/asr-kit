@@ -30,6 +30,7 @@ from app.config import (
     REALTIME_VAD_THRESHOLD,
 )
 from app.errors import OpenAIAPIError
+from app.model_registry import backend_supports_realtime
 from app.openai_format import speaker_labels
 from app.openai_realtime_events import (
     buffer_committed_event,
@@ -401,6 +402,36 @@ class RealtimeSession:
             )
         )
 
+    async def _ensure_realtime_backend(self, model_id: str) -> bool:
+        try:
+            configured = self.asr_service.registry.get(model_id)
+        except OpenAIAPIError as exc:
+            await self.send_event(
+                error_event(
+                    exc.message,
+                    error_type=exc.error_type,
+                    code=exc.code,
+                    param=exc.param,
+                )
+            )
+            return False
+
+        backend = configured.get("backend", "faster-whisper")
+        if not backend_supports_realtime(backend):
+            await self.send_event(
+                error_event(
+                    (
+                        f"Model '{model_id}' uses backend '{backend}', which is not "
+                        "supported for WebSocket realtime yet. "
+                        "Use POST /v1/audio/transcriptions instead."
+                    ),
+                    param="model",
+                    code="unsupported_backend",
+                )
+            )
+            return False
+        return True
+
     async def _handle_session_update(self, payload: dict[str, Any]) -> None:
         session = payload.get("session")
         if not isinstance(session, dict):
@@ -410,13 +441,19 @@ class RealtimeSession:
             return
 
         if "model" in session and session["model"]:
-            self.model_id = str(session["model"])
+            next_model_id = str(session["model"])
+            if not await self._ensure_realtime_backend(next_model_id):
+                return
+            self.model_id = next_model_id
             self.session_config["model"] = self.model_id
 
         transcription = session.get("input_audio_transcription")
         if isinstance(transcription, dict):
             if transcription.get("model"):
-                self.model_id = str(transcription["model"])
+                next_model_id = str(transcription["model"])
+                if not await self._ensure_realtime_backend(next_model_id):
+                    return
+                self.model_id = next_model_id
                 self.session_config["model"] = self.model_id
             if transcription.get("language"):
                 self.language = str(transcription["language"])

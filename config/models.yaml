@@ -1,14 +1,28 @@
 models:
   - id: bond005-whisper-podlodka-turbo
+    backend: faster-whisper
     path: /workspace/models/models--bond005--whisper-podlodka-turbo-ct2
     owned_by: local
     capabilities:
       - transcription
 
   - id: bond005-whisper-podlodka-turbo-diarize
+    backend: faster-whisper
     path: /workspace/models/models--bond005--whisper-podlodka-turbo-ct2
     owned_by: local
     capabilities:
       - transcription
       - diarization
     diarization_model: /workspace/models/pyannote/speaker-diarization-community-1
+
+  # NVIDIA NeMo (requires nemo_toolkit — see requirements.nemo.txt).
+  # Uncomment when the .nemo checkpoint is present under /workspace/models:
+  # - id: nemo-stt-ru-conformer-ctc
+  #   backend: nemo
+  #   path: /workspace/models/nemo/stt_ru_conformer_ctc_large.nemo
+  #   owned_by: nvidia-nemo
+  #   capabilities:
+  #     - transcription
+  #   metadata:
+  #     sample_rate: 16000
+  #     architecture: conformer-ctc
