@@ -65,7 +65,7 @@ def normalize_backend(raw_backend: Any, model_id: str) -> str:
 
 
 def backend_supports_realtime(backend: str) -> bool:
-    return backend == BACKEND_FASTER_WHISPER
+    return backend in ALLOWED_BACKENDS
 
 
 def load_models_config() -> dict[str, dict[str, Any]]:

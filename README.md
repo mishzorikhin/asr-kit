@@ -84,8 +84,8 @@ pip install -r requirements.nemo.txt
 Ограничения MVP:
 
 - REST `POST /v1/audio/transcriptions` — да
-- `WS /v1/realtime` для `backend: nemo` — пока отклоняется (`unsupported_backend`)
-- Word timestamps для NeMo — пока не поддержаны
+- `WS /v1/realtime` — да для `faster-whisper` и `nemo` (тот же VAD + chunked `transcribe_array`)
+- Word timestamps для NeMo — пока пустые (`words: []`), текст фразы возвращается
 - Параметры `beam_size` / `vad_filter` / `prompt` / `compute_type` ориентированы на faster-whisper и для NeMo игнорируются
 
 ## Код
@@ -105,7 +105,7 @@ app/openai_realtime_events.py # Realtime WebSocket event helpers
 
 ## Realtime WebSocket transcription
 
-Псевдо-реалтайм транскрибация через WebSocket — локальное подмножество [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime). Только транскрибация: без voice agent, TTS и tools. Поддерживается прогрессивная детализация: word timestamps, provisional speaker labels и финальная pyannote-диаризация по завершении сессии.
+Псевдо-реалтайм транскрибация через WebSocket — локальное подмножество [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime). Только транскрибация: без voice agent, TTS и tools. Работает с моделями `backend: faster-whisper` и `backend: nemo`. Поддерживается прогрессивная детализация: word timestamps (для Whisper), provisional speaker labels и финальная pyannote-диаризация по завершении сессии.
 
 **Подключение:** `WS /v1/realtime?model=<model_id>`
 
@@ -237,7 +237,7 @@ http://localhost:8000/realtime-demo?model=<model_id>&words=1&speakers=1
 
 ### Ожидания по задержке
 
-Задержка складывается из: накопления аудио до конца фразы (VAD), времени inference faster-whisper на GPU/CPU и размера сегмента. Это **не** true streaming ASR token-by-token; типично сотни миллисекунд — несколько секунд после паузы в речи. Speaker labels приходят ещё с небольшой дополнительной задержкой.
+Задержка складывается из: накопления аудио до конца фразы (VAD), времени inference ASR (`faster-whisper` или NeMo) на GPU/CPU и размера сегмента. Это **не** true streaming ASR token-by-token; типично сотни миллисекунд — несколько секунд после паузы в речи. Speaker labels приходят ещё с небольшой дополнительной задержкой.
 
 ### Отличия от OpenAI Realtime
 

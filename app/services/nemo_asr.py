@@ -252,12 +252,10 @@ class NeMoASRService:
         timestamp_granularities: list[str],
     ) -> dict[str, Any]:
         configured_model = self.registry.get(model_id)
-        word_timestamps = "word" in timestamp_granularities
-        if word_timestamps:
-            raise OpenAIAPIError(
-                "Word timestamps are not supported for NeMo models in this server yet.",
-                param="timestamp_granularities",
-                code="unsupported_parameter",
+        if "word" in timestamp_granularities:
+            logger.info(
+                "NeMo ASR does not provide word timestamps yet; returning empty words model=%s",
+                model_id,
             )
 
         if prompt or vad_filter:
@@ -348,16 +346,19 @@ class NeMoASRService:
             )
 
         if timestamp_granularities and "word" in timestamp_granularities:
-            raise OpenAIAPIError(
-                "Word timestamps are not supported for NeMo models in this server yet.",
-                param="timestamp_granularities",
-                code="unsupported_parameter",
+            logger.info(
+                "NeMo ASR does not provide word timestamps yet; returning empty words model=%s",
+                model_id,
             )
 
-        if prompt or beam_size != 5 or vad_filter:
+        if prompt or vad_filter:
             logger.info(
-                "NeMo ASR ignores whisper-oriented knobs for array model=%s",
+                "NeMo ASR ignores whisper-oriented knobs for array model=%s "
+                "prompt=%s vad_filter=%s beam_size=%s",
                 model_id,
+                bool(prompt),
+                vad_filter,
+                beam_size,
             )
 
         duration = samples.size / float(sample_rate)

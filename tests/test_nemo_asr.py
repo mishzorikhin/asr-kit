@@ -66,8 +66,12 @@ def test_nemo_transcribe_builds_openai_shaped_result(monkeypatch: pytest.MonkeyP
     fake_model.transcribe.assert_called_once()
 
 
-def test_nemo_rejects_word_timestamps(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nemo_word_timestamps_soft_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nemo_mod, "NEMO_AVAILABLE", True)
+
+    fake_model = MagicMock()
+    fake_model.transcribe.return_value = [SimpleNamespace(text="тест")]
+
     registry = MagicMock()
     registry.get.return_value = {
         "id": "nemo-demo",
@@ -80,22 +84,28 @@ def test_nemo_rejects_word_timestamps(monkeypatch: pytest.MonkeyPatch) -> None:
     service._lock = __import__("threading").Lock()
     service._models = {}
 
-    with pytest.raises(OpenAIAPIError) as exc_info:
-        NeMoASRService.transcribe(
-            service,
-            "/tmp/audio.wav",
-            model_id="nemo-demo",
-            language="ru",
-            prompt=None,
-            temperature=0.0,
-            device="cpu",
-            compute_type="float16",
-            beam_size=5,
-            vad_filter=False,
-            timestamp_granularities=["word"],
-        )
+    def fake_restore_from(*, restore_path: str, map_location: Any = None) -> Any:
+        return fake_model
 
-    assert exc_info.value.code == "unsupported_parameter"
+    monkeypatch.setattr(nemo_mod, "ASRModel", SimpleNamespace(restore_from=fake_restore_from))
+    monkeypatch.setattr(nemo_mod, "_audio_duration_seconds", lambda _path: 0.8)
+
+    result = NeMoASRService.transcribe(
+        service,
+        "/tmp/audio.wav",
+        model_id="nemo-demo",
+        language="ru",
+        prompt=None,
+        temperature=0.0,
+        device="cpu",
+        compute_type="float16",
+        beam_size=5,
+        vad_filter=False,
+        timestamp_granularities=["word"],
+    )
+
+    assert result["segments"][0]["text"] == "тест"
+    assert result["words"] == []
 
 
 def test_nemo_transcribe_array_empty() -> None:

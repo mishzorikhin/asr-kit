@@ -27,12 +27,8 @@ def test_normalize_backend_rejects_unknown() -> None:
 
 def test_backend_supports_realtime() -> None:
     assert backend_supports_realtime(BACKEND_FASTER_WHISPER) is True
-    assert backend_supports_realtime(BACKEND_NEMO) is False
-
-
-def test_realtime_rejects_nemo_backend_contract() -> None:
-    """Mirrors app.routers.realtime._validate_realtime_model backend gate."""
-    assert not backend_supports_realtime(BACKEND_NEMO)
+    assert backend_supports_realtime(BACKEND_NEMO) is True
+    assert backend_supports_realtime("onnx") is False
 
 
 def test_load_models_config_whisper_and_nemo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
