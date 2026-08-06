@@ -1,3 +1,11 @@
+"""FastAPI application factory for the OpenAI-compatible ASR API."""
+
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
@@ -10,9 +18,32 @@ from app.services.asr import ASRService
 from app.services.diarization import DiarizationService
 from app.services.model_unloader import ModelUnloader
 
+logger = logging.getLogger(__name__)
+
 
 def create_app() -> FastAPI:
+    """Build and wire the FastAPI application.
+
+    Returns:
+        Configured ``FastAPI`` instance with routers and shared services.
+    """
     configure_logging()
+
+    model_registry = ModelRegistry()
+    asr_service = ASRService(model_registry)
+    diarization_service = DiarizationService(asr_service)
+    model_unloader = ModelUnloader(asr_service, diarization_service)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        device = resolve_device()
+        compute_type = resolve_compute_type(device=device)
+        logger.info("ASR runtime device=%s compute_type=%s", device, compute_type)
+        model_unloader.start()
+        try:
+            yield
+        finally:
+            model_unloader.stop()
 
     app = FastAPI(
         title="OpenAI-compatible ASR API",
@@ -44,12 +75,8 @@ def create_app() -> FastAPI:
             "`diarized_json` response formats."
         ),
         version="1.0.0",
+        lifespan=lifespan,
     )
-
-    model_registry = ModelRegistry()
-    asr_service = ASRService(model_registry)
-    diarization_service = DiarizationService(asr_service)
-    model_unloader = ModelUnloader(asr_service, diarization_service)
 
     app.state.model_registry = model_registry
     app.state.asr_service = asr_service
@@ -64,20 +91,6 @@ def create_app() -> FastAPI:
     app.include_router(audio.router)
     app.include_router(realtime.router)
     app.include_router(ui.router)
-
-    @app.on_event("startup")
-    def start_model_unloader() -> None:
-        import logging
-
-        logger = logging.getLogger(__name__)
-        device = resolve_device()
-        compute_type = resolve_compute_type(device=device)
-        logger.info("ASR runtime device=%s compute_type=%s", device, compute_type)
-        model_unloader.start()
-
-    @app.on_event("shutdown")
-    def stop_model_unloader() -> None:
-        model_unloader.stop()
 
     return app
 

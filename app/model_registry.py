@@ -1,3 +1,7 @@
+"""Model registry loaded from config/models.yaml."""
+
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Any
@@ -14,28 +18,35 @@ BACKEND_NEMO = "nemo"
 ALLOWED_BACKENDS = {BACKEND_FASTER_WHISPER, BACKEND_NEMO}
 
 
-def validate_local_asr_path(model_id: str, model_path: str) -> None:
+def _require_absolute_existing_path(model_id: str, model_path: str) -> Path:
+    """Validate that model_path is absolute and exists."""
     path = Path(model_path)
-
     if not path.is_absolute():
-        raise RuntimeError(f"Model '{model_id}' path must be an absolute local path: {model_path}")
+        raise RuntimeError(
+            f"Model '{model_id}' path must be an absolute local path: {model_path}"
+        )
     if not path.exists():
         raise RuntimeError(f"Model '{model_id}' path does not exist: {model_path}")
+    return path
+
+
+def validate_local_asr_path(model_id: str, model_path: str) -> None:
+    """Validate a faster-whisper model path."""
+    _require_absolute_existing_path(model_id, model_path)
 
 
 def validate_local_nemo_path(model_id: str, model_path: str) -> None:
-    path = Path(model_path)
-
-    if not path.is_absolute():
-        raise RuntimeError(f"Model '{model_id}' path must be an absolute local path: {model_path}")
-    if not path.exists():
-        raise RuntimeError(f"Model '{model_id}' path does not exist: {model_path}")
+    """Validate a NeMo ``.nemo`` checkpoint path."""
+    path = _require_absolute_existing_path(model_id, model_path)
     if not path.is_file():
         raise RuntimeError(
-            f"Model '{model_id}' NeMo path must be a .nemo file, not a directory: {model_path}"
+            f"Model '{model_id}' NeMo path must be a .nemo file, not a directory: "
+            f"{model_path}"
         )
     if path.suffix != ".nemo":
-        raise RuntimeError(f"Model '{model_id}' NeMo path must be a .nemo file: {model_path}")
+        raise RuntimeError(
+            f"Model '{model_id}' NeMo path must be a .nemo file: {model_path}"
+        )
 
 
 def resolve_asr_model_path(model_path: str) -> str:
@@ -136,6 +147,8 @@ def load_models_config() -> dict[str, dict[str, Any]]:
 
 
 class ModelRegistry:
+    """Lookup configured ASR models for HTTP and realtime APIs."""
+
     def __init__(self) -> None:
         self.models = load_models_config()
 

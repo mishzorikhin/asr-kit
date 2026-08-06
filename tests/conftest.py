@@ -23,3 +23,9 @@ if "pyannote" not in sys.modules:
     pyannote_audio.Pipeline = MagicMock(name="Pipeline")  # type: ignore[attr-defined]
     pyannote_audio.Inference = MagicMock(name="Inference")  # type: ignore[attr-defined]
     pyannote_audio.Model = MagicMock(name="Model")  # type: ignore[attr-defined]
+
+
+# faster-whisper is heavy; unit tests mock WhisperModel at the module boundary.
+if "faster_whisper" not in sys.modules:
+    faster_whisper = _ensure_fake_module("faster_whisper")
+    faster_whisper.WhisperModel = MagicMock(name="WhisperModel")  # type: ignore[attr-defined]

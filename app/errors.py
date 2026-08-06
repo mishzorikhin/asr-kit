@@ -1,3 +1,7 @@
+"""OpenAI-compatible API error types and FastAPI exception handlers."""
+
+from __future__ import annotations
+
 from fastapi import Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -5,6 +9,8 @@ from fastapi.responses import JSONResponse
 
 
 class OpenAIAPIError(Exception):
+    """Application error serialized in OpenAI error envelope format."""
+
     def __init__(
         self,
         message: str,
@@ -22,6 +28,7 @@ class OpenAIAPIError(Exception):
 
 
 def is_gpu_memory_error(exc: BaseException) -> bool:
+    """Return True when an exception looks like GPU memory exhaustion."""
     message = str(exc).lower()
     return any(
         marker in message
@@ -36,6 +43,7 @@ def is_gpu_memory_error(exc: BaseException) -> bool:
 
 
 def gpu_memory_error(exc: BaseException) -> OpenAIAPIError:
+    """Build a 503 OpenAI-style error for GPU OOM failures."""
     return OpenAIAPIError(
         f"Not enough GPU memory to process this request: {exc}",
         status_code=503,
@@ -45,6 +53,7 @@ def gpu_memory_error(exc: BaseException) -> OpenAIAPIError:
 
 
 async def openai_error_handler(_: Request, exc: OpenAIAPIError) -> JSONResponse:
+    """Serialize ``OpenAIAPIError`` as an OpenAI-compatible JSON body."""
     return JSONResponse(
         status_code=exc.status_code,
         content={
@@ -62,6 +71,7 @@ async def validation_error_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
+    """Map FastAPI validation errors under ``/v1/`` to OpenAI-style JSON."""
     if request.url.path.startswith("/v1/"):
         return JSONResponse(
             status_code=422,

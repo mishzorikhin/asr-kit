@@ -1,3 +1,7 @@
+"""Environment-backed runtime settings for the ASR server."""
+
+from __future__ import annotations
+
 import logging
 import os
 from pathlib import Path
@@ -14,6 +18,15 @@ _CPU_COMPUTE_TYPE_FALLBACKS = {
 
 
 def env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean environment variable.
+
+    Args:
+        name: Environment variable name.
+        default: Value used when the variable is unset.
+
+    Returns:
+        Parsed boolean value.
+    """
     value = os.getenv(name)
     if value is None:
         return default
@@ -25,6 +38,14 @@ DEFAULT_COMPUTE_TYPE = os.getenv("DEFAULT_COMPUTE_TYPE", "float16")
 
 
 def resolve_device(device: str | None = None) -> str:
+    """Resolve the runtime device, falling back to CPU when CUDA is unavailable.
+
+    Args:
+        device: Optional explicit device override.
+
+    Returns:
+        ``cuda`` or another requested non-CUDA device string.
+    """
     requested = (device or DEFAULT_DEVICE).strip().lower()
     if requested in _CUDA_DEVICE_ALIASES:
         if torch.cuda.is_available():
@@ -42,6 +63,15 @@ def resolve_compute_type(
     *,
     device: str | None = None,
 ) -> str:
+    """Resolve CTranslate2 compute type for the active device.
+
+    Args:
+        compute_type: Optional explicit compute type.
+        device: Optional device used to decide CPU fallbacks.
+
+    Returns:
+        Compute type string safe for the resolved device.
+    """
     resolved_device = resolve_device(device)
     requested = (compute_type or DEFAULT_COMPUTE_TYPE).strip().lower()
     fallback = _CPU_COMPUTE_TYPE_FALLBACKS.get(requested)

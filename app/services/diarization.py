@@ -1,3 +1,7 @@
+"""Pyannote diarization service with pipeline caching."""
+
+from __future__ import annotations
+
 import logging
 import subprocess
 import tempfile
@@ -7,7 +11,7 @@ import wave
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import torch
 from pyannote.audio import Pipeline
@@ -22,23 +26,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CachedDiarizationPipeline:
+    """In-memory cache entry for a loaded pyannote pipeline."""
+
     pipeline: Pipeline
     last_used_at: float
     active_uses: int = 0
 
 
 class DiarizationService:
+    """Runs pyannote speaker diarization with idle unload."""
+
     def __init__(self, asr_service: ASRService) -> None:
         self.asr_service = asr_service
         self._lock = threading.Lock()
         self._pipelines: dict[str, CachedDiarizationPipeline] = {}
 
-    def get_pipeline(self, model_path: str) -> Pipeline:
-        with self.use_pipeline(model_path) as pipeline:
-            return pipeline
-
     @contextmanager
-    def use_pipeline(self, model_path: str):
+    def use_pipeline(self, model_path: str) -> Iterator[Pipeline]:
         with self._lock:
             if model_path not in self._pipelines:
                 path = Path(model_path)
