@@ -1,3 +1,7 @@
+"""Background idle unload of ASR and diarization models."""
+
+from __future__ import annotations
+
 import gc
 import logging
 import threading
@@ -10,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class ModelUnloader:
+    """Periodically unloads idle models to reclaim GPU/CPU memory."""
+
     def __init__(
         self,
         asr_service: ASRService,
@@ -21,6 +27,7 @@ class ModelUnloader:
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
+        """Start the background unload loop when TTL is enabled."""
         if MODEL_IDLE_TTL_SECONDS <= 0:
             logger.info("Idle model unloading is disabled")
             return
@@ -41,6 +48,7 @@ class ModelUnloader:
         self._thread.start()
 
     def stop(self) -> None:
+        """Stop the background unload loop."""
         if self._thread is None:
             return
 
@@ -55,6 +63,11 @@ class ModelUnloader:
                 gc.collect()
 
     def unload_idle(self) -> int:
+        """Unload idle ASR and diarization models once.
+
+        Returns:
+            Total number of models/pipelines unloaded.
+        """
         asr_unloaded = self.asr_service.unload_idle_models()
         diarization_unloaded = self.diarization_service.unload_idle_pipelines()
         return asr_unloaded + diarization_unloaded

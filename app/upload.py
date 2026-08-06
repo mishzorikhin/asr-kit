@@ -1,3 +1,7 @@
+"""Upload helpers for multipart audio transcription requests."""
+
+from __future__ import annotations
+
 import shutil
 import tempfile
 from pathlib import Path
@@ -9,6 +13,17 @@ from app.errors import OpenAIAPIError
 
 
 async def save_upload_to_temp_file(file: UploadFile) -> str:
+    """Persist an uploaded audio file to a temporary path.
+
+    Args:
+        file: Multipart upload from FastAPI.
+
+    Returns:
+        Absolute path to the temporary file. Caller must delete it.
+
+    Raises:
+        OpenAIAPIError: If the extension is unsupported or the file is empty.
+    """
     suffix = Path(file.filename or "audio").suffix.lower()
     if suffix and suffix not in SUPPORTED_AUDIO_EXTENSIONS:
         raise OpenAIAPIError(

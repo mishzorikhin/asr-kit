@@ -91,16 +91,23 @@ pip install -r requirements.nemo.txt
 ## Код
 
 ```text
-app/server.py                 # сборка FastAPI app
-app/config.py                 # env/default settings
-app/model_registry.py         # загрузка и валидация config/models.yaml
-app/routers/                  # /health, /v1/models, /v1/audio/transcriptions, /v1/realtime
-app/services/asr.py           # фасад ASR (dispatch по backend)
-app/services/whisper_asr.py   # faster-whisper
-app/services/nemo_asr.py      # NVIDIA NeMo (optional import)
-app/services/diarization.py   # pyannote
-app/openai_format.py          # OpenAI-compatible responses
-app/openai_realtime_events.py # Realtime WebSocket event helpers
+app/server.py                      # сборка FastAPI app (lifespan)
+app/config.py                      # env/default settings
+app/model_registry.py              # загрузка и валидация config/models.yaml
+app/routers/                       # /health, /v1/models, /v1/audio/transcriptions, /v1/realtime
+app/services/asr.py                # фасад ASR (dispatch по backend)
+app/services/whisper_asr.py        # faster-whisper
+app/services/nemo_asr.py           # NVIDIA NeMo (optional import)
+app/services/diarization.py        # pyannote
+app/services/wav_io.py             # shared temp WAV helpers
+app/services/realtime_session.py   # realtime orchestrator (event routing)
+app/services/realtime_vad.py       # server-side VAD state machine
+app/services/realtime_types.py     # realtime dataclasses
+app/services/realtime_session_update.py  # session.update parsing
+app/services/realtime_transcriber.py     # segment ASR + provisional speakers
+app/services/realtime_finalize.py        # session-end pyannote finalize
+app/openai_format.py               # OpenAI-compatible responses
+app/openai_realtime_events.py      # Realtime WebSocket event helpers
 ```
 
 ## Realtime WebSocket transcription

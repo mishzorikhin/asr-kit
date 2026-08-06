@@ -1,12 +1,14 @@
-"""NVIDIA NeMo ASR backend. Optional: requires nemo_toolkit[asr]."""
+"""NVIDIA NeMo ASR backend.
+
+Optional dependency: requires ``nemo_toolkit[asr]``. Whisper-only deployments
+keep this module importable; construction fails clearly when NeMo is missing.
+"""
 
 from __future__ import annotations
 
 import logging
-import tempfile
 import threading
 import time
-import wave
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +25,8 @@ from app.config import (
 )
 from app.errors import OpenAIAPIError, gpu_memory_error, is_gpu_memory_error
 from app.model_registry import ModelRegistry
+from app.services.wav_io import audio_duration_seconds as _audio_duration_seconds
+from app.services.wav_io import write_temp_wav as _write_temp_wav
 from app.tool_calls import record_tool_call
 
 logger = logging.getLogger(__name__)
@@ -38,12 +42,15 @@ except ImportError:  # whisper-only deployments
 
 @dataclass
 class CachedNeMoModel:
+    """In-memory cache entry for a loaded NeMo ASR model."""
+
     model: Any
     last_used_at: float
     active_uses: int = 0
 
 
 def _hypothesis_text(hyp: Any) -> str:
+    """Normalize a NeMo hypothesis object into plain text."""
     if hyp is None:
         return ""
     if isinstance(hyp, str):
@@ -54,41 +61,6 @@ def _hypothesis_text(hyp: Any) -> str:
     if isinstance(hyp, (list, tuple)) and hyp:
         return _hypothesis_text(hyp[0])
     return str(hyp).strip()
-
-
-def _audio_duration_seconds(audio_path: str) -> float:
-    path = Path(audio_path)
-    try:
-        with wave.open(str(path), "rb") as handle:
-            frames = handle.getnframes()
-            rate = handle.getframerate() or 1
-            return frames / float(rate)
-    except wave.Error:
-        pass
-
-    try:
-        import soundfile as sf
-
-        info = sf.info(str(path))
-        return float(info.duration)
-    except Exception:
-        logger.warning("Could not determine duration for %s; using 0.0", audio_path)
-        return 0.0
-
-
-def _write_temp_wav(audio: np.ndarray, sample_rate: int) -> str:
-    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
-    clipped = np.clip(samples, -1.0, 1.0)
-    pcm16 = (clipped * 32767.0).astype(np.int16)
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    tmp_path = tmp.name
-    tmp.close()
-    with wave.open(tmp_path, "wb") as handle:
-        handle.setnchannels(1)
-        handle.setsampwidth(2)
-        handle.setframerate(sample_rate)
-        handle.writeframes(pcm16.tobytes())
-    return tmp_path
 
 
 class NeMoASRService:

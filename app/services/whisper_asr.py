@@ -1,9 +1,13 @@
+"""Faster-whisper ASR backend with model caching and idle unload."""
+
+from __future__ import annotations
+
 import logging
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 import torch
@@ -25,23 +29,38 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CachedASRModel:
+    """In-memory cache entry for a loaded faster-whisper model."""
+
     model: WhisperModel
     last_used_at: float
     active_uses: int = 0
 
 
 class WhisperASRService:
+    """Loads and runs faster-whisper models for REST and realtime paths."""
+
     def __init__(self, registry: ModelRegistry) -> None:
         self.registry = registry
         self._lock = threading.Lock()
         self._models: dict[tuple[str, str, str], CachedASRModel] = {}
 
-    def get_model(self, model_path: str, device: str, compute_type: str) -> WhisperModel:
-        with self.use_model(model_path, device, compute_type) as model:
-            return model
-
     @contextmanager
-    def use_model(self, model_path: str, device: str, compute_type: str):
+    def use_model(
+        self,
+        model_path: str,
+        device: str,
+        compute_type: str,
+    ) -> Iterator[WhisperModel]:
+        """Acquire a cached Whisper model for the duration of a request.
+
+        Args:
+            model_path: Configured local model path.
+            device: Requested device (``cuda`` / ``cpu``).
+            compute_type: CTranslate2 compute type.
+
+        Yields:
+            A ready ``WhisperModel`` instance.
+        """
         device = resolve_device(device)
         compute_type = resolve_compute_type(compute_type, device=device)
         resolved_path = resolve_asr_model_path(model_path)
@@ -120,6 +139,14 @@ class WhisperASRService:
                 self._clear_cuda_cache()
 
     def unload_idle_models(self, max_idle_seconds: int = MODEL_IDLE_TTL_SECONDS) -> int:
+        """Unload cached models that have been idle longer than the TTL.
+
+        Args:
+            max_idle_seconds: Idle threshold in seconds.
+
+        Returns:
+            Number of models unloaded.
+        """
         if max_idle_seconds <= 0:
             return 0
 
@@ -138,7 +165,10 @@ class WhisperASRService:
                 device=key[1],
                 compute_type=key[2],
             )
-            logger.info("Unloading idle ASR model path=%s device=%s compute_type=%s", *key)
+            logger.info(
+                "Unloading idle ASR model path=%s device=%s compute_type=%s",
+                *key,
+            )
             del cached.model
 
         if evicted and torch.cuda.is_available():
@@ -164,11 +194,13 @@ class WhisperASRService:
         vad_filter: bool,
         timestamp_granularities: list[str],
     ) -> dict[str, Any]:
+        """Transcribe an audio file from disk."""
         configured_model = self.registry.get(model_id)
         word_timestamps = "word" in timestamp_granularities
 
         logger.info(
-            "Transcribing file=%s model=%s language=%s beam_size=%s vad_filter=%s word_timestamps=%s",
+            "Transcribing file=%s model=%s language=%s beam_size=%s vad_filter=%s "
+            "word_timestamps=%s",
             audio_path,
             model_id,
             language,
@@ -220,7 +252,9 @@ class WhisperASRService:
                             "tokens": list(getattr(segment, "tokens", []) or []),
                             "temperature": temperature,
                             "avg_logprob": getattr(segment, "avg_logprob", 0.0),
-                            "compression_ratio": getattr(segment, "compression_ratio", 0.0),
+                            "compression_ratio": getattr(
+                                segment, "compression_ratio", 0.0
+                            ),
                             "no_speech_prob": getattr(segment, "no_speech_prob", 0.0),
                             "words": segment_words,
                         }
@@ -268,8 +302,11 @@ class WhisperASRService:
         vad_filter: bool = False,
         timestamp_granularities: list[str] | None = None,
     ) -> dict[str, Any]:
+        """Transcribe an in-memory float32 mono PCM buffer (realtime path)."""
         configured_model = self.registry.get(model_id)
-        word_timestamps = bool(timestamp_granularities and "word" in timestamp_granularities)
+        word_timestamps = bool(
+            timestamp_granularities and "word" in timestamp_granularities
+        )
         samples = np.asarray(audio, dtype=np.float32).reshape(-1)
 
         if samples.size == 0:
@@ -281,13 +318,17 @@ class WhisperASRService:
 
         if sample_rate != 16000:
             raise OpenAIAPIError(
-                f"Unsupported sample_rate {sample_rate}; realtime audio must be 16 kHz PCM16 mono.",
+                (
+                    f"Unsupported sample_rate {sample_rate}; realtime audio must "
+                    "be 16 kHz PCM16 mono."
+                ),
                 param="sample_rate",
                 code="unsupported_audio_format",
             )
 
         logger.info(
-            "Transcribing array model=%s language=%s samples=%d beam_size=%s vad_filter=%s word_timestamps=%s",
+            "Transcribing array model=%s language=%s samples=%d beam_size=%s "
+            "vad_filter=%s word_timestamps=%s",
             model_id,
             language,
             samples.size,
@@ -349,7 +390,9 @@ class WhisperASRService:
                 code="audio_decode_failed",
             ) from exc
 
-        text = " ".join(segment["text"] for segment in segments if segment["text"]).strip()
+        text = " ".join(
+            segment["text"] for segment in segments if segment["text"]
+        ).strip()
         logger.info(
             "Transcribed array model=%s duration=%s segments=%d text_chars=%d",
             model_id,

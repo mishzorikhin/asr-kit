@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from pathlib import Path
@@ -55,7 +57,7 @@ OpenAI Python SDK example:
 ```python
 from openai import OpenAI
 
-client = OpenAI(api_key="local", base_url="http://10.0.0.104:8000/v1")
+client = OpenAI(api_key="local", base_url="http://localhost:8000/v1")
 
 with open("speech.mp3", "rb") as audio:
     transcript = client.audio.transcriptions.create(

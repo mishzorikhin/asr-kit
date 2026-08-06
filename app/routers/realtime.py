@@ -1,3 +1,5 @@
+"""WebSocket realtime transcription endpoint."""
+
 from __future__ import annotations
 
 import asyncio
@@ -27,18 +29,26 @@ router = APIRouter(prefix="/v1", tags=["realtime"])
 
 
 def _validate_realtime_model(registry: ModelRegistry, model_id: str) -> dict[str, Any]:
+    """Validate that a configured model can be used for realtime ASR.
+
+    Args:
+        registry: Loaded model registry.
+        model_id: Requested model id.
+
+    Returns:
+        Configured model metadata.
+
+    Raises:
+        OpenAIAPIError: If the model is missing or unsupported for realtime.
+    """
     configured = registry.get(model_id)
-    if "diarization" in configured["capabilities"] and "transcription" not in configured["capabilities"]:
-        raise OpenAIAPIError(
-            f"Model '{model_id}' does not support transcription.",
-            param="model",
-            code="model_not_found",
-        )
     backend = configured.get("backend", "faster-whisper")
     if not backend_supports_realtime(backend):
         raise OpenAIAPIError(
-            f"Model '{model_id}' uses backend '{backend}', which is not supported "
-            "for WebSocket realtime yet. Use POST /v1/audio/transcriptions instead.",
+            (
+                f"Model '{model_id}' uses backend '{backend}', which is not supported "
+                "for WebSocket realtime yet. Use POST /v1/audio/transcriptions instead."
+            ),
             param="model",
             code="unsupported_backend",
         )
@@ -50,6 +60,7 @@ async def realtime_transcription(
     websocket: WebSocket,
     model: str = Query(..., description="Configured ASR model id from GET /v1/models"),
 ) -> None:
+    """Open a pseudo-realtime transcription WebSocket session."""
     await websocket.accept()
 
     registry: ModelRegistry = websocket.app.state.model_registry
@@ -88,8 +99,6 @@ async def realtime_transcription(
         ),
     )
     await send_event(session_created_event(session.session_snapshot()))
-
-    idle_task = asyncio.create_task(_idle_watchdog(websocket, session))
 
     try:
         while not session.closed:
@@ -145,27 +154,7 @@ async def realtime_transcription(
     except WebSocketDisconnect:
         logger.info("Realtime client disconnected model=%s", model)
     finally:
-        idle_task.cancel()
         if not session.ended_via_protocol:
             await session.finalize_session()
         await session.close()
         record_tool_call("realtime.disconnect", model=model)
-
-
-async def _idle_watchdog(websocket: WebSocket, session: RealtimeSession) -> None:
-    try:
-        while not session.closed:
-            await asyncio.sleep(5)
-            if session.idle_seconds() >= REALTIME_WS_IDLE_TIMEOUT_SEC:
-                await websocket.send_json(
-                    error_event(
-                        "WebSocket idle timeout",
-                        error_type="server_error",
-                        code="timeout",
-                    )
-                )
-                await websocket.close(code=1000)
-                await session.close()
-                return
-    except asyncio.CancelledError:
-        return
