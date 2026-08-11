@@ -8,6 +8,7 @@
 
 ```text
 GET  /health
+GET  /v1/status
 GET  /v1/models
 GET  /v1/models/{model}
 POST /v1/audio/transcriptions
@@ -390,6 +391,26 @@ REALTIME_SILENCE_DURATION_MS=700
 ```
 
 `MODEL_IDLE_TTL_SECONDS=0` отключает фоновую автовыгрузку по простою. Если `MODEL_UNLOAD_AFTER_REQUEST=true`, модель выгружается сразу после обработки последнего активного запроса. Модель не выгружается, пока по ней выполняется активный запрос.
+
+## Автоскейлинг реплик Whisper
+
+Whisper (`faster-whisper`) живёт **внутри** API-процесса. При включённом автоскейле каждый загруженный экземпляр модели — реплика, которая обслуживает один inference за раз.
+
+Если приходит второй запрос, а единственная реплика занята:
+
+1. Сервис проверяет лимит `WHISPER_MAX_REPLICAS` и пытается поднять ещё один `WhisperModel`.
+2. На CUDA новая реплика по возможности садится на менее загруженный `device_index` (другой GPU).
+3. Запрос уходит на новую реплику. Если поднять нельзя (лимит / OOM), запрос ждёт свободную реплику до `WHISPER_REPLICA_WAIT_SECONDS`.
+
+```bash
+WHISPER_AUTOSCALE_ENABLED=true
+WHISPER_MAX_REPLICAS=2            # по умолчанию: число CUDA GPU или 2 на CPU
+WHISPER_REPLICA_WAIT_SECONDS=300  # 0 = ждать бесконечно
+```
+
+Состояние пула: `GET /v1/status`.
+
+Пока автоскейл только для Whisper. NeMo и отдельные Docker-реплики не затрагиваются. Учитывайте VRAM: каждая реплика держит свою копию весов.
 
 ## Переменные окружения
 
