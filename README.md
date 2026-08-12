@@ -8,6 +8,7 @@
 
 ```text
 GET  /health
+GET  /v1/status
 GET  /v1/models
 GET  /v1/models/{model}
 POST /v1/audio/transcriptions
@@ -15,6 +16,8 @@ WS   /v1/realtime?model=<model_id>
 GET  /realtime-demo
 GET  /docs
 ```
+
+`/health` — liveness. `/v1/status` — состояние пула реплик Whisper (busy/idle, лимиты автоскейла). Подробности в разделе [Автоскейлинг реплик Whisper](#автоскейлинг-реплик-whisper).
 
 ## Конфиг моделей
 
@@ -94,9 +97,9 @@ pip install -r requirements.nemo.txt
 app/server.py                 # сборка FastAPI app
 app/config.py                 # env/default settings
 app/model_registry.py         # загрузка и валидация config/models.yaml
-app/routers/                  # /health, /v1/models, /v1/audio/transcriptions, /v1/realtime
+app/routers/                  # /health, /v1/status, /v1/models, /v1/audio, /v1/realtime
 app/services/asr.py           # фасад ASR (dispatch по backend)
-app/services/whisper_asr.py   # faster-whisper
+app/services/whisper_asr.py   # faster-whisper + in-process replica pool
 app/services/nemo_asr.py      # NVIDIA NeMo (optional import)
 app/services/diarization.py   # pyannote
 app/openai_format.py          # OpenAI-compatible responses
@@ -391,6 +394,120 @@ REALTIME_SILENCE_DURATION_MS=700
 
 `MODEL_IDLE_TTL_SECONDS=0` отключает фоновую автовыгрузку по простою. Если `MODEL_UNLOAD_AFTER_REQUEST=true`, модель выгружается сразу после обработки последнего активного запроса. Модель не выгружается, пока по ней выполняется активный запрос.
 
+## Автоскейлинг реплик Whisper
+
+Whisper (`faster-whisper`) живёт **внутри** API-процесса (`uvicorn --workers 1`), а не как отдельный контейнер. Автоскейл поднимает дополнительные in-process экземпляры `WhisperModel` (реплики) и маршрутизирует на них параллельные запросы.
+
+Пока работает **только для `backend: faster-whisper`**. NeMo, pyannote и горизонтальный scale Docker-контейнеров не затрагиваются.
+
+### Поведение
+
+При `WHISPER_AUTOSCALE_ENABLED=true` каждая реплика обслуживает **один** inference за раз.
+
+```text
+запрос #1  →  реплика 0 (загрузка при первом обращении)
+запрос #2  →  реплика 0 занята
+           →  replicas < WHISPER_MAX_REPLICAS?
+                да  → поднять реплику 1 → отдать запрос туда
+                нет → ждать свободную реплику
+                      (до WHISPER_REPLICA_WAIT_SECONDS, иначе 503)
+```
+
+Алгоритм выбора при acquire:
+
+1. Есть idle-реплика (`active_uses == 0`) → взять её (предпочитается давно не использовавшаяся).
+2. Иначе, если `len(pool) + pending < WHISPER_MAX_REPLICAS` → зарезервировать слот и загрузить новый `WhisperModel`.
+3. На CUDA новая реплика получает `device_index` наименее загруженного GPU.
+4. Если лимит исчерпан или загрузка упала с OOM, а другие реплики ещё живы → ждать освобождения.
+5. Таймаут ожидания → `503` с `code=asr_replicas_busy` (или `insufficient_gpu_memory` при OOM без запасных реплик).
+
+При `WHISPER_AUTOSCALE_ENABLED=false` поведение как раньше: одна модель шарится между параллельными запросами (`active_uses` может быть > 1).
+
+Автоскейл действует и для REST `POST /v1/audio/transcriptions`, и для realtime `WS /v1/realtime` (оба пути ходят через `WhisperASRService.use_model`).
+
+### Env
+
+```bash
+WHISPER_AUTOSCALE_ENABLED=true
+WHISPER_MAX_REPLICAS=2            # по умолчанию: число CUDA GPU, иначе 2 (CPU)
+WHISPER_REPLICA_WAIT_SECONDS=300  # 0 = ждать бесконечно
+```
+
+| Переменная | Default | Описание |
+|------------|---------|----------|
+| `WHISPER_AUTOSCALE_ENABLED` | `true` | Включить пул реплик и scale-up при busy |
+| `WHISPER_MAX_REPLICAS` | `#GPU` или `2` | Максимум одновременно загруженных `WhisperModel` на одну пару `(path, device, compute_type)` |
+| `WHISPER_REPLICA_WAIT_SECONDS` | `300` | Сколько ждать свободную реплику при полном пуле; `0` — без таймаута |
+
+В `docker-compose*.yml` эти переменные уже проброшены. Явный `WHISPER_MAX_REPLICAS` лучше задать в `.env`, если нужно ограничить VRAM на одной карте.
+
+### Связь с автовыгрузкой
+
+- `MODEL_UNLOAD_AFTER_REQUEST=true` — после последнего активного use реплика выгружается из пула (VRAM освобождается; следующий запрос снова cold-start).
+- `MODEL_IDLE_TTL_SECONDS` — idle-реплики снимаются фоновым `ModelUnloader`.
+- Пока по реплике идёт inference (`active_uses > 0`), она не выгружается.
+- Ожидающие потоки будятся через condition variable при `release` / unload.
+
+Для «тёплого» пула при частых параллельных запросах обычно ставят `MODEL_UNLOAD_AFTER_REQUEST=false` и полагаются на idle TTL.
+
+### `GET /v1/status`
+
+```bash
+curl -s http://localhost:8000/v1/status | jq
+```
+
+Пример ответа:
+
+```json
+{
+  "status": "ok",
+  "whisper": {
+    "autoscale_enabled": true,
+    "max_replicas": 2,
+    "replica_wait_seconds": 300,
+    "replica_count": 2,
+    "busy_replicas": 1,
+    "idle_replicas": 1,
+    "replicas": [
+      {
+        "path": "/workspace/models/models--bond005--whisper-podlodka-turbo-ct2",
+        "device": "cuda",
+        "compute_type": "float16",
+        "replica_id": 0,
+        "device_index": 0,
+        "active_uses": 1,
+        "busy": true
+      },
+      {
+        "path": "/workspace/models/models--bond005--whisper-podlodka-turbo-ct2",
+        "device": "cuda",
+        "compute_type": "float16",
+        "replica_id": 1,
+        "device_index": 1,
+        "active_uses": 0,
+        "busy": false
+      }
+    ]
+  }
+}
+```
+
+`/health` по-прежнему только liveness (`{"status":"ok"}`). Для load/busy смотрите `/v1/status`.
+
+### Ошибки
+
+| HTTP | `error.code` | Когда |
+|------|--------------|--------|
+| 503 | `asr_replicas_busy` | Все реплики заняты, scale-up невозможен, таймаут ожидания истёк |
+| 503 | `insufficient_gpu_memory` | Не хватило VRAM на загрузку/inference (как и раньше) |
+
+### Ограничения и советы
+
+- Каждая реплика держит **свою** копию весов в VRAM/RAM. Две float16-реплики на одной GPU часто упираются в OOM — либо снижайте `WHISPER_MAX_REPLICAS`, либо используйте несколько GPU / `int8`.
+- Это не Docker/`compose scale` и не K8s HPA: один контейнер, один uvicorn worker, несколько моделей в памяти процесса.
+- Диаризация (`pyannote`) по-прежнему одна и конкурирует за тот же GPU.
+- События пула пишутся в tool-calls (`asr.model.autoscale`, `asr.model.acquire`, `asr.model.release`) — удобно смотреть в `/ui` / `/v1/tool-calls`.
+
 ## Переменные окружения
 
 ```text
@@ -402,6 +519,14 @@ DEFAULT_DEVICE=cuda
 DEFAULT_COMPUTE_TYPE=float16
 DEFAULT_LANGUAGE=ru
 DEFAULT_DIARIZATION_MODEL=/workspace/models/pyannote/speaker-diarization-community-1
+
+MODEL_IDLE_TTL_SECONDS=600
+MODEL_UNLOAD_INTERVAL_SECONDS=30
+MODEL_UNLOAD_AFTER_REQUEST=true
+
+WHISPER_AUTOSCALE_ENABLED=true
+# WHISPER_MAX_REPLICAS=2
+WHISPER_REPLICA_WAIT_SECONDS=300
 
 HF_HOME=/workspace/hf-cache
 HF_HUB_OFFLINE=1
@@ -445,6 +570,10 @@ for segment in transcript.segments:
 ```
 
 ## Curl
+
+```bash
+curl -s "http://localhost:8000/v1/status"
+```
 
 ```bash
 curl -X POST "http://localhost:8000/v1/audio/transcriptions" \

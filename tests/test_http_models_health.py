@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from unittest.mock import MagicMock
 
 from app.errors import OpenAIAPIError, openai_error_handler
 from app.model_registry import ModelRegistry
@@ -15,6 +16,39 @@ def test_health_endpoint() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_status_endpoint_reports_whisper_replicas() -> None:
+    from app.routers import status
+    from app.services.asr import ASRService
+
+    app = FastAPI()
+    registry = MagicMock()
+    asr = ASRService(registry)
+    asr._whisper.replica_status = MagicMock(  # type: ignore[method-assign]
+        return_value=[
+            {
+                "path": "/tmp/w",
+                "device": "cpu",
+                "compute_type": "int8",
+                "replica_id": 0,
+                "device_index": 0,
+                "active_uses": 1,
+                "busy": True,
+            }
+        ]
+    )
+    app.state.asr_service = asr
+    app.include_router(status.router)
+    client = TestClient(app)
+
+    response = client.get("/v1/status")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["whisper"]["replica_count"] == 1
+    assert payload["whisper"]["busy_replicas"] == 1
+    assert payload["whisper"]["idle_replicas"] == 0
 
 
 def test_models_list_endpoint(tmp_path, monkeypatch) -> None:

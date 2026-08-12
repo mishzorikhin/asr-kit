@@ -113,3 +113,6 @@ class ASRService:
         if self._nemo is not None:
             unloaded += self._nemo.unload_idle_models(max_idle_seconds)
         return unloaded
+
+    def whisper_replica_status(self) -> list[dict[str, Any]]:
+        return self._whisper.replica_status()

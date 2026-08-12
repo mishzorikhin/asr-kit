@@ -67,6 +67,24 @@ MODEL_IDLE_TTL_SECONDS = int(os.getenv("MODEL_IDLE_TTL_SECONDS", str(10 * 60)))
 MODEL_UNLOAD_INTERVAL_SECONDS = int(os.getenv("MODEL_UNLOAD_INTERVAL_SECONDS", "30"))
 MODEL_UNLOAD_AFTER_REQUEST = env_bool("MODEL_UNLOAD_AFTER_REQUEST", False)
 
+# Whisper in-process replica autoscaling: when all loaded replicas are busy,
+# try to spawn another WhisperModel (up to WHISPER_MAX_REPLICAS) and route there.
+WHISPER_AUTOSCALE_ENABLED = env_bool("WHISPER_AUTOSCALE_ENABLED", True)
+
+
+def _default_whisper_max_replicas() -> int:
+    raw = os.getenv("WHISPER_MAX_REPLICAS")
+    if raw is not None and raw.strip() != "":
+        return max(1, int(raw))
+    if torch.cuda.is_available():
+        return max(1, int(torch.cuda.device_count()))
+    return 2
+
+
+WHISPER_MAX_REPLICAS = _default_whisper_max_replicas()
+# Seconds to wait for a free replica when at max capacity (0 = wait forever).
+WHISPER_REPLICA_WAIT_SECONDS = float(os.getenv("WHISPER_REPLICA_WAIT_SECONDS", "300"))
+
 SUPPORTED_AUDIO_EXTENSIONS = {
     ".flac",
     ".m4a",

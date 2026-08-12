@@ -5,7 +5,7 @@ from app.config import resolve_compute_type, resolve_device
 from app.errors import OpenAIAPIError, openai_error_handler, validation_error_handler
 from app.logging_config import configure_logging
 from app.model_registry import ModelRegistry
-from app.routers import audio, health, models, realtime, ui
+from app.routers import audio, health, models, realtime, status, ui
 from app.services.asr import ASRService
 from app.services.diarization import DiarizationService
 from app.services.model_unloader import ModelUnloader
@@ -25,6 +25,9 @@ def create_app() -> FastAPI:
             "- Implemented OpenAI-style endpoints: `GET /v1/models`, "
             "`GET /v1/models/{model}`, `POST /v1/audio/transcriptions`, and "
             "`WS /v1/realtime`.\n"
+            "- `GET /v1/status` reports Whisper replica pool / autoscaling state.\n"
+            "- Whisper can autoscale in-process replicas when concurrent requests "
+            "arrive and capacity remains (`WHISPER_AUTOSCALE_ENABLED`).\n"
             "- `POST /v1/audio/translations` is not implemented.\n"
             "- Streaming transcription responses are not implemented; `stream=true` "
             "returns an OpenAI-style `unsupported_parameter` error.\n"
@@ -60,6 +63,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RequestValidationError, validation_error_handler)
 
     app.include_router(health.router)
+    app.include_router(status.router)
     app.include_router(models.router)
     app.include_router(audio.router)
     app.include_router(realtime.router)
